@@ -43,6 +43,7 @@ import { isReservedVariableKey } from "./utils/reservedVariableKeys";
 import { registerQuickAddCliHandlers } from "./cli/registerQuickAddCliHandlers";
 import { autoSyncEnabledProviders } from "./ai/modelSyncService";
 import { QUICK_ADD_COMMAND_LABELS } from "./commandLabels";
+import { t } from "./i18n";
 import { setQuickAddInstance } from "./quickAddInstance";
 import { applyTemplateToNote } from "./engine/applyTemplateToActiveNote";
 import type ITemplateChoice from "./types/choices/ITemplateChoice";
@@ -122,7 +123,7 @@ export default class QuickAdd extends Plugin {
 
 		this.addCommand({
 			id: "runQuickAdd",
-			name: QUICK_ADD_COMMAND_LABELS.run,
+			name: t(QUICK_ADD_COMMAND_LABELS.run),
 			callback: () => {
 				openChoiceLauncher(this);
 			},
@@ -130,7 +131,7 @@ export default class QuickAdd extends Plugin {
 
 		this.addCommand({
 			id: "runTemplateFromFolder",
-			name: QUICK_ADD_COMMAND_LABELS.runTemplateFromFolder,
+			name: t(QUICK_ADD_COMMAND_LABELS.runTemplateFromFolder),
 			callback: () => {
 				void runTemplateFromFolder(this.app, this, {
 					choiceExecutor: new ChoiceExecutor(this.app, this),
@@ -140,7 +141,7 @@ export default class QuickAdd extends Plugin {
 
 		this.addCommand({
 			id: "applyTemplateToActiveFile",
-			name: QUICK_ADD_COMMAND_LABELS.applyTemplate,
+			name: t(QUICK_ADD_COMMAND_LABELS.applyTemplate),
 			checkCallback: (checking) => {
 				const file = this.app.workspace.getActiveFile();
 				const available = file?.extension === "md";
@@ -165,7 +166,7 @@ export default class QuickAdd extends Plugin {
 						// (QUICK_ADD_COMMAND_LABELS.applyTemplate) so the same action reads
 						// consistently across both surfaces. Obsidian prefixes commands with
 						// "QuickAdd:"; the file menu is unprefixed, so add it here.
-						.setTitle(`QuickAdd: ${QUICK_ADD_COMMAND_LABELS.applyTemplate}`)
+						.setTitle(`QuickAdd: ${t(QUICK_ADD_COMMAND_LABELS.applyTemplate)}`)
 						.setIcon("file-plus")
 						.onClick(() => {
 							void applyTemplateToNote(this.app, this, {
@@ -179,7 +180,7 @@ export default class QuickAdd extends Plugin {
 
 		this.addCommand({
 			id: "reloadQuickAdd",
-			name: QUICK_ADD_COMMAND_LABELS.reloadDev,
+			name: t(QUICK_ADD_COMMAND_LABELS.reloadDev),
 			checkCallback: (checking) => {
 				if (checking) {
 					return this.settings.devMode;
@@ -202,7 +203,7 @@ export default class QuickAdd extends Plugin {
 
 		this.addCommand({
 			id: "openQuickAddSettings",
-			name: QUICK_ADD_COMMAND_LABELS.openSettings,
+			name: t(QUICK_ADD_COMMAND_LABELS.openSettings),
 			callback: () => {
 				openQuickAddSettings(this.app, this.manifest.id);
 			},

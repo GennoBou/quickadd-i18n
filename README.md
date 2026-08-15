@@ -1,3 +1,15 @@
+> [!NOTE]
+> **日本語版 (i18n Fork) について**
+> 本リポジトリは、[QuickAdd (オリジナル)](https://github.com/chhoumann/quickadd) を多言語化 (i18n) し、日本語リソースを追加したフォーク版です。
+> 個人利用・コミュニティ提供を目的としており、Obsidianへのインストールは **[Obsidian42 - BRAT](https://github.com/TfTHacker/obsidian42-brat)** プラグイン経由で行ってください。
+>
+> **BRATでのインストール手順**:
+> 1. Obsidianで BRAT プラグインを有効化
+> 2. コマンドパレットから `BRAT: Plugins: Add a beta plugin for testing` を実行
+> 3. 本リポジトリのURL (`https://github.com/GennoBou/quickadd-i18n`) を入力
+
+---
+
 <p align="center">
   <img src="assets/quickadd-logo.png" alt="QuickAdd for Obsidian" width="520" />
 </p>

@@ -37,6 +37,7 @@ import {
 import { renderDevelopmentInfo } from "./quickAddSettingsDevelopmentInfo";
 import { createDocsLink, DOCS_URLS, openDocsUrl } from "./docs";
 import { rootChoicesOf } from "./utils/choiceUtils";
+import { t } from "./i18n";
 
 /** String-named keys of {@link QuickAddSettings} — used to type the declarative
  * `control` keys so a mistyped key is caught at compile time. */
@@ -155,7 +156,7 @@ export class QuickAddSettingsTab extends PluginSettingTab {
 	private choicesAndPackagesGroup(): SettingDefinitionGroup<SettingsKey> {
 		return {
 			type: "group",
-			heading: "Choices & packages",
+			heading: t("Choices & packages"),
 			// QuickAdd's power surface is syntax you have to learn ({{VALUE}},
 			// {{DATE}}, capture targets, ...) and until now the manual was reachable
 			// from exactly one place in the whole plugin (issue #1541). A help icon
@@ -165,19 +166,19 @@ export class QuickAddSettingsTab extends PluginSettingTab {
 				(button) =>
 					button
 						.setIcon("help-circle")
-						.setTooltip("QuickAdd documentation")
+						.setTooltip(t("QuickAdd documentation"))
 						.onClick(() =>
 							openDocsUrl(DOCS_URLS.gettingStarted, button.extraSettingsEl),
 						),
 			],
 			items: [
 				{
-					name: "Choices",
+					name: t("Choices"),
 					render: (setting) => this.renderChoicesView(setting),
 				},
 				{
-					name: "Packages",
-					desc: PACKAGES_DESC,
+					name: t("Packages"),
+					desc: t(PACKAGES_DESC),
 					render: (setting) => this.renderPackages(setting),
 				},
 			],
@@ -187,27 +188,27 @@ export class QuickAddSettingsTab extends PluginSettingTab {
 	private choicePickerGroup(): SettingDefinitionGroup<SettingsKey> {
 		return {
 			type: "group",
-			heading: "Choice picker",
+			heading: t("Choice picker"),
 			items: [
 				{
-					name: "Search nested choices",
+					name: t("Search nested choices"),
 					// "Multi" is the internal type id; every other user-facing string
 					// says folder (see src/utils/choiceNoun.ts), and this was the one
 					// place in the whole settings surface that leaked it.
-					desc: "When searching in the choice picker, also match choices nested inside folders and show their path. Note that nested matches can outrank same-level ones. Disable to search only the open level.",
+					desc: t("When searching in the choice picker, also match choices nested inside folders and show their path. Note that nested matches can outrank same-level ones. Disable to search only the open level."),
 					control: { type: "toggle", key: "searchNestedChoices" },
 				},
 				{
-					name: "“New note from template” in the launcher",
-					desc: "Add a row to Run QuickAdd that lists templates from your configured template folder, so you can create a note from a template without a dedicated Template choice. Only appears when a template folder is configured; the command palette entry works regardless.",
+					name: t("“New note from template” in the launcher"),
+					desc: t("Add a row to Run QuickAdd that lists templates from your configured template folder, so you can create a note from a template without a dedicated Template choice. Only appears when a template folder is configured; the command palette entry works regardless."),
 					control: {
 						type: "dropdown",
 						key: "templateFolderLauncherRow",
 						defaultValue: "bottom",
 						options: {
-							bottom: "Show at the bottom (keeps your top choice first)",
-							top: "Show at the top",
-							off: "Hide",
+							bottom: t("Show at the bottom (keeps your top choice first)"),
+							top: t("Show at the top"),
+							off: t("Hide"),
 						},
 					},
 				},
@@ -218,25 +219,25 @@ export class QuickAddSettingsTab extends PluginSettingTab {
 	private inputGroup(): SettingDefinitionGroup<SettingsKey> {
 		return {
 			type: "group",
-			heading: "Input",
+			heading: t("Input"),
 			items: [
 				{
-					name: "Use multi-line input prompt",
-					desc: "Use multi-line input prompt instead of single-line input prompt. Submit multi-line prompts with Ctrl/Cmd+Enter; Enter inserts a newline.",
+					name: t("Use multi-line input prompt"),
+					desc: t("Use multi-line input prompt instead of single-line input prompt. Submit multi-line prompts with Ctrl/Cmd+Enter; Enter inserts a newline."),
 					control: { type: "toggle", key: "inputPrompt" },
 				},
 				{
-					name: "Persist input prompt drafts",
-					desc: "Keep drafts when closing input prompts so they can be restored on reopen. Drafts are stored only for this session.",
+					name: t("Persist input prompt drafts"),
+					desc: t("Keep drafts when closing input prompts so they can be restored on reopen. Drafts are stored only for this session."),
 					control: { type: "toggle", key: "persistInputPromptDrafts" },
 				},
 				{
-					name: "Use editor selection as default Capture value",
-					desc: "When enabled, Capture uses the current editor selection as {{VALUE}} and may skip the prompt. When disabled, Capture always prompts for {{VALUE}}.",
+					name: t("Use editor selection as default Capture value"),
+					desc: t("When enabled, Capture uses the current editor selection as {{VALUE}} and may skip the prompt. When disabled, Capture always prompts for {{VALUE}}."),
 					control: { type: "toggle", key: "useSelectionAsCaptureValue" },
 				},
 				{
-					name: "One-page input for choices",
+					name: t("One-page input for choices"),
 					// The trailing sentence used to read "See One-page Inputs in the
 					// docs." as plain, unlinked prose (issue #1541).
 					desc: this.descWithDocsLink(
@@ -247,10 +248,8 @@ export class QuickAddSettingsTab extends PluginSettingTab {
 					control: { type: "toggle", key: "onePageInputEnabled" },
 				},
 				{
-					name: "Date aliases",
-					desc:
-						"Shortcodes for natural language date parsing. " +
-						"One per line: alias = phrase. Example: tm = tomorrow.",
+					name: t("Date aliases"),
+					desc: t("Shortcodes for natural language date parsing. One per line: alias = phrase. Example: tm = tomorrow."),
 					render: (setting) => this.renderDateAliases(setting),
 				},
 			],
