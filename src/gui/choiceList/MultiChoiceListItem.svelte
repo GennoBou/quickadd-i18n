@@ -298,10 +298,6 @@
         line-height: 1.4;
     }
 
-    .qaUnreadableFolder code {
-        font-size: inherit;
-    }
-
     .qaFolderCount {
         flex: 0 0 auto;
         color: var(--text-faint);
