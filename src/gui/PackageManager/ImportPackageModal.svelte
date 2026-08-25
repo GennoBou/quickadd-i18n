@@ -43,6 +43,7 @@
 		ChoiceDecisions,
 		ExistsProbe,
 	} from "./importDecisions";
+	import { t } from "src/i18n";
 
 	let { app, close }: { app: App; close: () => void } = $props();
 
@@ -120,27 +121,27 @@
 		if (!s) return "";
 		const parts: string[] = [];
 		if (s.added)
-			parts.push(`${s.added} choice${s.added === 1 ? "" : "s"} added`);
-		if (s.overwritten) parts.push(`${s.overwritten} overwritten`);
+			parts.push(t("{count} choices added", { count: s.added }));
+		if (s.overwritten) parts.push(t("{count} overwritten", { count: s.overwritten }));
 		if (s.assetsWritten)
 			parts.push(
-				`${s.assetsWritten} file${s.assetsWritten === 1 ? "" : "s"} written`,
+				t("{count} files written", { count: s.assetsWritten }),
 			);
 		const skipped = s.skipped + s.assetsSkipped;
-		if (skipped) parts.push(`${skipped} skipped`);
+		if (skipped) parts.push(t("{count} skipped", { count: skipped }));
 		return parts.length
-			? `Imported: ${parts.join(", ")}.`
-			: "Nothing was imported.";
+			? t("Imported: {parts}.", { parts: parts.join(", ") })
+			: t("Nothing was imported.");
 	});
 
 	const ackLabel = $derived(
 		criticalScriptCount > 0
 			? hasUnbundledScript
-				? "I have reviewed each bundled script above and trust the source, including scripts that are not included and cannot be shown."
-				: "I have reviewed each script above and trust the source."
+				? t("I have reviewed each bundled script above and trust the source, including scripts that are not included and cannot be shown.")
+				: t("I have reviewed each script above and trust the source.")
 			: hasUnbundledScript
-				? "This package runs scripts that are not included and cannot be reviewed. I trust the source."
-				: "I understand this package can run code, and I trust the source.",
+				? t("This package runs scripts that are not included and cannot be reviewed. I trust the source.")
+				: t("I understand this package can run code, and I trust the source."),
 	);
 
 	function markReviewed(path: string) {
@@ -328,18 +329,18 @@
 	}
 
 	function formatPathHint(pathHint: string[]): string {
-		if (!pathHint || pathHint.length === 0) return "Root";
-		return pathHint.slice(0, -1).join(" › ") || "Root";
+		if (!pathHint || pathHint.length === 0) return t("Root");
+		return pathHint.slice(0, -1).join(" › ") || t("Root");
 	}
 
 	async function handleImport() {
 		if (hasImported) {
-			new Notice("This package has already been imported.");
+			new Notice(t("This package has already been imported."));
 			return;
 		}
 
 		if (!loadedPackage || !analysis) {
-			new Notice("Load a package before importing.");
+			new Notice(t("Load a package before importing."));
 			return;
 		}
 
@@ -377,17 +378,13 @@
 			hasImported = true;
 
 			new Notice(
-				`Imported ${result.addedChoiceIds.length + result.overwrittenChoiceIds.length} choice${
-					result.addedChoiceIds.length +
-						result.overwrittenChoiceIds.length ===
-					1
-						? ""
-						: "s"
-				} successfully.`,
+				t("Imported {count} choices successfully.", {
+					count: result.addedChoiceIds.length + result.overwrittenChoiceIds.length,
+				}),
 			);
 		} catch (error) {
 			console.error(error);
-			new Notice(`Import failed: ${(error as Error)?.message ?? error}`);
+			new Notice(t("Import failed: {error}", { error: (error as Error)?.message ?? String(error) }));
 		} finally {
 			isImporting = false;
 		}
@@ -396,53 +393,47 @@
 
 <div class="importPackageModal">
 	<header>
-		<h2>Import QuickAdd package</h2>
-		<p>Review what this package adds and runs before importing.</p>
+		<h2>{t("Import QuickAdd package")}</h2>
+		<p>{t("Review what this package adds and runs before importing.")}</p>
 	</header>
 
 	<section class="pasteSection">
 		<label>
-			<span>Paste package JSON</span>
+			<span>{t("Paste package JSON")}</span>
 			<textarea
 				bind:value={pastedContent}
 				oninput={handleContentInput}
-				placeholder="Paste the contents of a .quickadd.json package here"
+				placeholder={t("Paste the contents of a .quickadd.json package here")}
 				rows="8"
 			></textarea>
 		</label>
 		{#if loadError}
 			<div class="errorMessage">{loadError}</div>
 		{:else if isAnalyzing}
-			<div class="info">Analyzing package…</div>
+			<div class="info">{t("Analyzing package…")}</div>
 		{/if}
 	</section>
 
 	{#if loadedPackage && analysis}
 		<section class="packageMeta">
 			<span
-				><span class="metaLabel">Version</span>
+				><span class="metaLabel">{t("Version")}</span>
 				{loadedPackage.pkg.quickAddVersion}</span
 			>
 			<span class="metaSep" aria-hidden="true">·</span>
 			<span
-				><span class="metaLabel">Created</span>
+				><span class="metaLabel">{t("Created")}</span>
 				{new Date(
 					loadedPackage.pkg.createdAt,
 				).toLocaleDateString()}</span
 			>
 			<span class="metaSep" aria-hidden="true">·</span>
 			<span
-				>{analysis.choiceConflicts.length} choice{analysis
-					.choiceConflicts.length === 1
-					? ""
-					: "s"}</span
+				>{t("{count} choices", { count: analysis.choiceConflicts.length })}</span
 			>
 			<span class="metaSep" aria-hidden="true">·</span>
 			<span
-				>{loadedPackage.pkg.assets.length} file{loadedPackage.pkg.assets
-					.length === 1
-					? ""
-					: "s"}</span
+				>{t("{count} files", { count: loadedPackage.pkg.assets.length })}</span
 			>
 		</section>
 
@@ -451,9 +442,9 @@
 		{/if}
 
 		<section class="choicesSection">
-			<h3>Choices</h3>
+			<h3>{t("Choices")}</h3>
 			{#if analysis.choiceConflicts.length === 0}
-				<p>No choices found in this package.</p>
+				<p>{t("No choices found in this package.")}</p>
 			{:else}
 				<table>
 					<colgroup>
@@ -463,9 +454,9 @@
 					</colgroup>
 					<thead>
 						<tr>
-							<th>Name</th>
-							<th>Location</th>
-							<th>Action</th>
+							<th>{t("Name")}</th>
+							<th>{t("Location")}</th>
+							<th>{t("Action")}</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -480,13 +471,13 @@
 							)}
 							{@const hasMacro = (pc?.commands?.length ?? 0) > 0}
 							<tr>
-								<td data-label="Name">
+								<td data-label={t("Name")}>
 									<div class="choiceName">
 										{conflict.name}
 									</div>
 									{#if conflict.exists}
 										<div class="choiceExists">
-											already in vault
+											{t("already in vault")}
 										</div>
 									{/if}
 									{#if hasMacro}
@@ -502,15 +493,15 @@
 											{expandedMacros.has(
 												conflict.choiceId,
 											)
-												? "Hide macro"
-												: "Show macro"}
+												? t("Hide macro")
+												: t("Show macro")}
 										</button>
 									{/if}
 								</td>
-								<td data-label="Location"
+								<td data-label={t("Location")}
 									>{formatPathHint(conflict.pathHint)}</td
 								>
-								<td data-label="Action">
+								<td data-label={t("Action")}>
 									<select
 										class="dropdown"
 										value={effectiveMode}
@@ -520,16 +511,16 @@
 												event,
 											)}
 									>
-										<option value="import">Import</option>
+										<option value="import">{t("Import")}</option>
 										{#if conflict.exists}
 											<option value="overwrite"
-												>Overwrite</option
+												>{t("Overwrite")}</option
 											>
 										{/if}
 										<option value="duplicate"
-											>Duplicate</option
+											>{t("Duplicate")}</option
 										>
-										<option value="skip">Skip</option>
+										<option value="skip">{t("Skip")}</option>
 									</select>
 								</td>
 							</tr>
@@ -550,13 +541,13 @@
 
 		{#if loadedPackage}
 			<section class="filesSection">
-				<h3>Files</h3>
+				<h3>{t("Files")}</h3>
 				{#if fileRows.length === 0}
-					<p>No files bundled with this package.</p>
+					<p>{t("No files bundled with this package.")}</p>
 				{:else}
 					{#if addedFileRows.length > 0}
 						<h4 class="filesGroupHeading">
-							Added ({addedFileRows.length})
+							{t("Added ({count})", { count: addedFileRows.length })}
 						</h4>
 						<div class="fileRows">
 							{#each addedFileRows as row (row.conflict.originalPath)}
@@ -590,7 +581,7 @@
 					{/if}
 					{#if overwriteFileRows.length > 0}
 						<h4 class="filesGroupHeading overwrite">
-							Will overwrite ({overwriteFileRows.length})
+							{t("Will overwrite ({count})", { count: overwriteFileRows.length })}
 						</h4>
 						<div class="fileRows">
 							{#each overwriteFileRows as row (row.conflict.originalPath)}
@@ -629,14 +620,14 @@
 				<section class="warningsBand">
 					{#if preview.missingReferences.length > 0}
 						<div class="warnItem">
-							<h4>Missing files</h4>
+							<h4>{t("Missing files")}</h4>
 							<ul>
 								{#each preview.missingReferences as ref (ref.path)}
 									<li class:script={ref.asScript}>
 										<code>{ref.path}</code>:
 										{ref.asScript
-											? "not bundled, so it runs from whatever file exists at that path after import"
-											: "not bundled and not in your vault"}
+											? t("not bundled, so it runs from whatever file exists at that path after import")
+											: t("not bundled and not in your vault")}
 										<span class="warnLoc"
 											>{ref.breadcrumb}</span
 										>
@@ -647,12 +638,11 @@
 					{/if}
 					{#if preview.orphanAssets.length > 0}
 						<div class="warnItem">
-							<h4>Unreferenced files</h4>
+							<h4>{t("Unreferenced files")}</h4>
 							<ul>
 								{#each preview.orphanAssets as path (path)}
 									<li>
-										<code>{path}</code>: bundled but not
-										used by any choice
+										<code>{path}</code>: {t("bundled but not used by any choice")}
 									</li>
 								{/each}
 							</ul>
@@ -690,8 +680,7 @@
 			</label>
 			{#if criticalScriptCount > 0 && !fullyReviewed}
 				<p id="qa-import-ack-hint" class="ackGate-hint">
-					Open “View contents” on each of the {criticalScriptCount} executable
-					script{criticalScriptCount === 1 ? "" : "s"} above to enable this.
+					{t("Open “View contents” on each of the {count} executable scripts above to enable this.", { count: criticalScriptCount })}
 				</p>
 			{/if}
 		</section>
@@ -704,7 +693,7 @@
 			class="secondary"
 			disabled={isImporting}
 		>
-			Cancel
+			{t("Cancel")}
 		</button>
 		<button
 			type="button"
@@ -712,15 +701,15 @@
 			class="primary"
 			disabled={isImporting || (!hasImported && !canImport)}
 			title={!hasImported && requiresAck && fullyReviewed && !acknowledged
-				? "Confirm the acknowledgement above to continue"
+				? t("Confirm the acknowledgement above to continue")
 				: undefined}
 		>
 			{#if isImporting}
-				Importing…
+				{t("Importing…")}
 			{:else if hasImported}
-				Close
+				{t("Close")}
 			{:else}
-				Import package
+				{t("Import package")}
 			{/if}
 		</button>
 	</section>

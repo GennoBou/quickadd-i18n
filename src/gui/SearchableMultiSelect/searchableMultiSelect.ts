@@ -1,3 +1,5 @@
+import { t } from "../../i18n";
+
 export interface SearchableMultiSelectItem<T> {
 	/** Selection identity. Rows with the same key share selected state. */
 	key: string;
@@ -66,7 +68,7 @@ export default class SearchableMultiSelect<T> {
 		this.searchInputEl.type = "search";
 		this.searchInputEl.name = `qa-multi-select-search-${this.instanceId}`;
 		this.searchInputEl.placeholder =
-			options.searchPlaceholder ?? "Search options...";
+			options.searchPlaceholder ?? t("Search options...");
 		this.searchInputEl.setAttribute("aria-label", this.searchInputEl.placeholder);
 		this.searchInputEl.setAttribute("autocomplete", "off");
 		this.searchInputEl.setAttribute("spellcheck", "false");
@@ -79,7 +81,7 @@ export default class SearchableMultiSelect<T> {
 		this.listEl = document.createElement("div");
 		this.listEl.className = "qa-searchable-multi-select__list";
 		this.listEl.setAttribute("role", "group");
-		this.listEl.setAttribute("aria-label", "Options");
+		this.listEl.setAttribute("aria-label", t("Options"));
 
 		this.rootEl.append(searchContainer, this.summaryEl, this.listEl);
 		containerEl.appendChild(this.rootEl);
@@ -169,8 +171,8 @@ export default class SearchableMultiSelect<T> {
 			empty.className = "qa-searchable-multi-select__empty";
 			empty.setAttribute("role", "status");
 			empty.textContent = this.indexedItems.length
-				? `No options match “${this.query.trim()}”`
-				: (this.options.emptyText ?? "No options available");
+				? t("No options match “{query}”", { query: this.query.trim() })
+				: (this.options.emptyText ?? t("No options available"));
 			this.listEl.appendChild(empty);
 		}
 
@@ -182,7 +184,7 @@ export default class SearchableMultiSelect<T> {
 			const limit = document.createElement("div");
 			limit.className = "qa-searchable-multi-select__limit";
 			limit.setAttribute("role", "status");
-			limit.textContent = `Showing ${visible.length} of ${matches.length} options. Refine your search to see the rest.`;
+			limit.textContent = t("Showing {visible} of {total} options. Refine your search to see the rest.", { visible: visible.length, total: matches.length });
 			this.listEl.appendChild(limit);
 		}
 
@@ -263,11 +265,11 @@ export default class SearchableMultiSelect<T> {
 					.filter(({ item }) => this.options.isSelected(item))
 					.map(({ item }) => item.key),
 			).size;
-		const selectedLabel = `${selectedCount} selected`;
+		const selectedLabel = t("{count} selected", { count: selectedCount });
 		if (!this.query.trim()) {
-			this.summaryEl.textContent = `${selectedLabel} · ${this.indexedItems.length} options`;
+			this.summaryEl.textContent = `${selectedLabel} · ${t("{count} options", { count: this.indexedItems.length })}`;
 			return;
 		}
-		this.summaryEl.textContent = `${selectedLabel} · ${matchCount} matches`;
+		this.summaryEl.textContent = `${selectedLabel} · ${t("{count} matches", { count: matchCount })}`;
 	}
 }

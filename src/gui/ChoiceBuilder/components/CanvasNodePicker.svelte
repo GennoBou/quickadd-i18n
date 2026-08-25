@@ -8,6 +8,7 @@ import {
 	resolveStaticCanvasTargetFile,
 	type CanvasNodeOption,
 } from "../canvasNodes";
+import { t } from "src/i18n";
 
 /**
  * Reactive port of captureChoiceBuilder.renderCanvasNodePicker. The imperative
@@ -40,10 +41,10 @@ const selectedNodeId = $derived((nodeId ?? "").trim());
 
 const statusText = $derived(
 	phase === "ready"
-		? `Showing ${filteredOptions.length} of ${nodeOptions.length} nodes`
+		? t("Showing {count} of {total} nodes", { count: filteredOptions.length, total: nodeOptions.length })
 		: phase === "empty"
 			? emptyMessage
-			: "Loading canvas nodes…",
+			: t("Loading canvas nodes…"),
 );
 
 onMount(() => {
@@ -51,13 +52,13 @@ onMount(() => {
 		const canvasFile = resolveStaticCanvasTargetFile(app, canvasTargetPath);
 		if (!canvasFile) {
 			emptyMessage =
-				"Node picker works for direct .canvas paths that already exist in your vault. Format syntax paths cannot be listed here.";
+				t("Node picker works for direct .canvas paths that already exist in your vault. Format syntax paths cannot be listed here.");
 			phase = "empty";
 			return;
 		}
 		nodeOptions = await readCanvasNodeOptions(app, canvasFile);
 		if (nodeOptions.length === 0) {
-			emptyMessage = "No selectable nodes found in the target canvas.";
+			emptyMessage = t("No selectable nodes found in the target canvas.");
 			phase = "empty";
 			return;
 		}
@@ -72,13 +73,13 @@ function applyNodeId(id: string) {
 function openCanvas() {
 	const canvasFile = resolveStaticCanvasTargetFile(app, canvasTargetPath);
 	if (!canvasFile) {
-		new Notice("Target canvas file was not found.");
+		new Notice(t("Target canvas file was not found."));
 		return;
 	}
 	void app.workspace
 		.getLeaf(true)
 		.openFile(canvasFile)
-		.catch(() => new Notice("Could not open target canvas."));
+		.catch(() => new Notice(t("Could not open target canvas.")));
 }
 
 function useActiveSelection() {
@@ -88,7 +89,7 @@ function useActiveSelection() {
 	);
 	if (!activeSelectionNodeId) {
 		new Notice(
-			"Open the target canvas and select exactly one card to use this action.",
+			t("Open the target canvas and select exactly one card to use this action."),
 		);
 		return;
 	}
@@ -98,8 +99,8 @@ function useActiveSelection() {
 	if (!selectedOption) {
 		new Notice(
 			phase === "ready"
-				? "The selected node was not found in the loaded canvas."
-				: "Canvas nodes are still loading. Wait a moment and try again.",
+				? t("The selected node was not found in the loaded canvas.")
+				: t("Canvas nodes are still loading. Wait a moment and try again."),
 		);
 		return;
 	}
@@ -114,32 +115,32 @@ function copyNodeId(id: string) {
 	void (async () => {
 		try {
 			await navigator.clipboard.writeText(id);
-			new Notice(`Copied node id ${id}`);
+			new Notice(t("Copied node id {id}", { id }));
 		} catch {
-			new Notice("Could not copy node id automatically.");
+			new Notice(t("Could not copy node id automatically."));
 		}
 	})();
 }
 
 function typeLabel(type: CanvasNodeOption["type"]): string {
-	return type === "text" ? "TEXT" : type === "file" ? "FILE" : "NODE";
+	return type === "text" ? t("TEXT") : type === "file" ? t("FILE") : t("NODE");
 }
 </script>
 
 <div class="qa-canvas-node-picker">
 	<div class="qa-canvas-node-actions">
-		<button type="button" onclick={openCanvas}>Open target canvas</button>
+		<button type="button" onclick={openCanvas}>{t("Open target canvas")}</button>
 		<button type="button" onclick={useActiveSelection}>
-			Use selected in open canvas
+			{t("Use selected in open canvas")}
 		</button>
-		<button type="button" onclick={() => applyNodeId("")}>Clear</button>
+		<button type="button" onclick={() => applyNodeId("")}>{t("Clear")}</button>
 	</div>
 
 	<div class="qa-canvas-node-filter">
 		<input
 			type="text"
-			placeholder="Filter by card text, file path, or node id…"
-			aria-label="Filter canvas nodes"
+			placeholder={t("Filter by card text, file path, or node id…")}
+			aria-label={t("Filter canvas nodes")}
 			bind:value={filterQuery}
 		/>
 	</div>
@@ -150,7 +151,7 @@ function typeLabel(type: CanvasNodeOption["type"]): string {
 		{#if phase === "empty"}
 			<div class="qa-canvas-node-empty">{emptyMessage}</div>
 		{:else if phase === "ready" && filteredOptions.length === 0}
-			<div class="qa-canvas-node-empty">No nodes match the current filter.</div>
+			<div class="qa-canvas-node-empty">{t("No nodes match the current filter.")}</div>
 		{:else}
 			{#each filteredOptions as option (option.id)}
 				{@const isSelected = selectedNodeId === option.id}
@@ -170,15 +171,15 @@ function typeLabel(type: CanvasNodeOption["type"]): string {
 								class:mod-cta={isSelected}
 								onclick={() => applyNodeId(option.id)}
 							>
-								{isSelected ? "Selected" : "Use node"}
+								{isSelected ? t("Selected") : t("Use node")}
 							</button>
 						{:else}
 							<button type="button" disabled title={option.capturableReason}>
-								Unavailable
+								{t("Unavailable")}
 							</button>
 						{/if}
 						<button type="button" onclick={() => copyNodeId(option.id)}>
-							Copy ID
+							{t("Copy ID")}
 						</button>
 					</div>
 				</div>

@@ -34,3 +34,6 @@ coverage/
 
 # Obsidian application bundle (only ever extracted transiently for inspection)
 /app.js
+
+# Serena MCP
+.serena/

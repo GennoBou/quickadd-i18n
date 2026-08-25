@@ -1,8 +1,9 @@
 <script lang="ts">
 	import ObsidianIcon from "../components/ObsidianIcon.svelte";
+	import { t } from "src/i18n";
 
 	let {
-		what = "your choices",
+		what = t("your choices"),
 		detail = "",
 	}: {
 		/** Noun phrase naming what could not be displayed. Defaults to the only
@@ -31,16 +32,13 @@
 <div class="qaChoicesUnavailable">
 	<div class="qaChoicesUnavailableHead">
 		<ObsidianIcon iconId="alert-triangle" size={16} />
-		<span class="qaChoicesUnavailableTitle">QuickAdd couldn't display {what}</span>
+		<span class="qaChoicesUnavailableTitle">{t("QuickAdd couldn't display {what}", { what })}</span>
 	</div>
 	<p class="qaChoicesUnavailableBody">
-		Something in this vault's QuickAdd settings could not be read. Your choices
-		have not been changed or deleted, and QuickAdd will not overwrite them.
+		{t("Something in this vault's QuickAdd settings could not be read. Your choices have not been changed or deleted, and QuickAdd will not overwrite them.")}
 	</p>
 	<p class="qaChoicesUnavailableBody">
-		They are stored in
-		<code>.obsidian/plugins/quickadd/data.json</code> inside this vault. Make a
-		copy of that file before editing it.
+		{t("They are stored in .obsidian/plugins/quickadd/data.json inside this vault. Make a copy of that file before editing it.")}
 	</p>
 	{#if detail}
 		<pre class="qaChoicesUnavailableDetail">{detail}</pre>

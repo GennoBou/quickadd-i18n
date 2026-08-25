@@ -158,15 +158,15 @@ describe("UI label copy across src/", () => {
 	 * expression) simply do not match, which is the intent — see the file header.
 	 */
 	const PATTERNS: RegExp[] = [
-		/\.set(?:Name|Title|ButtonText|Tooltip)\(\s*"([^"$]+)"\s*[,)]/g,
-		/\.(?:titleEl|headerEl)\.setText\(\s*"([^"$]+)"\s*\)/g,
-		/\.(?:titleEl|headerEl)\.textContent\s*=\s*"([^"$]+)"/g,
-		/createEl\(\s*"h[1-6]"\s*,\s*\{\s*text:\s*"([^"$]+)"/g,
+		/\.set(?:Name|Title|ButtonText|Tooltip)\(\s*(?:t\(\s*)?"([^"$]+)"/g,
+		/\.(?:titleEl|headerEl)\.setText\(\s*(?:t\(\s*)?"([^"$]+)"/g,
+		/\.(?:titleEl|headerEl)\.textContent\s*=\s*(?:t\(\s*)?"([^"$]+)"/g,
+		/createEl\(\s*"h[1-6]"\s*,\s*\{\s*text:\s*(?:t\(\s*)?"([^"$]+)"/g,
 		/<h[1-6]>([^<{]+)<\/h[1-6]>/g,
-		/\bname="([^"{]+)"/g,
+		/\bname=(?:\{t\("([^"]+)"\)\}|"([^"]+)")/g,
 		// Svelte buttons with a literal label — GlobalVariablesView's "Add variable"
 		// and the package-manager actions never touch a Setting or setButtonText.
-		/<button\b[^>]*>\s*([^<>{]+?)\s*<\/button>/g,
+		/<button\b[^>]*>\s*(?:\{t\("([^"]+)"\)\}|([^<>{]+?))\s*<\/button>/g,
 	];
 
 	function walk(dir: string, acc: string[] = []): string[] {
@@ -187,10 +187,13 @@ describe("UI label copy across src/", () => {
 	const labels = walk(SRC).flatMap((file) => {
 		const source = readFileSync(file, "utf8");
 		return PATTERNS.flatMap((pattern) =>
-			[...source.matchAll(pattern)].map((match) => ({
-				file: relative(SRC, file),
-				text: match[1].trim(),
-			})),
+			[...source.matchAll(pattern)].map((match) => {
+				const text = (match[1] || match[2] || "").trim();
+				return {
+					file: relative(SRC, file),
+					text,
+				};
+			}).filter((item) => item.text.length > 0),
 		);
 	});
 

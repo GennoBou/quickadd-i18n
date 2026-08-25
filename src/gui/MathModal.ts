@@ -11,6 +11,7 @@ import { getQuickAddInstance } from "../quickAddInstance";
 import { LATEX_CURSOR_MOVE_HERE } from "../LaTeXSymbols";
 import { LaTeXSuggester } from "./suggesters/LaTeXSuggester";
 import { promptCancelled } from "../errors/UserCancelError";
+import { t } from "../i18n";
 
 export class MathModal extends Modal {
 	public waitForClose: Promise<string>;
@@ -76,7 +77,7 @@ export class MathModal extends Modal {
 		tc.inputEl.addEventListener("keydown", this.keybindListener);
 
 		const hintEl = this.contentEl.createDiv({
-			text: "Ctrl/Cmd+Enter to submit · Tab to jump to the cursor marker",
+			text: t("Ctrl/Cmd+Enter to submit · Tab to jump to the cursor marker"),
 			cls: "setting-item-description",
 		});
 		hintEl.setCssStyles({ marginTop: "0.5rem" });
@@ -126,12 +127,12 @@ export class MathModal extends Modal {
 			mainContentContainer.createDiv();
 		this.createButton(
 			buttonBarContainer,
-			"Ok",
+			t("Ok"),
 			this.submitClickCallback
 		).setCta().buttonEl.setCssStyles({ marginRight: "0" });
 		this.createButton(
 			buttonBarContainer,
-			"Cancel",
+			t("Cancel"),
 			this.cancelClickCallback
 		);
 

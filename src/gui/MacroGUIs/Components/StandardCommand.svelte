@@ -3,6 +3,7 @@
     import IconButton from "../../components/IconButton.svelte";
     import DragHandle from "../../components/DragHandle.svelte";
     import {getCommandDisplayName} from "../../../utils/macroHelpers";
+    import { t } from "src/i18n";
 
     let {
         command,
@@ -26,12 +27,12 @@
     <div class="quickAddCommandControls">
         <IconButton
             iconId="trash-2"
-            label={`Delete ${getCommandDisplayName(command)}`}
+            label={t("Delete {name}", { name: getCommandDisplayName(command) })}
             extraClass="clickable"
             onclick={() => onDeleteCommand(command.id)}
         />
         <DragHandle
-            label={`Reorder ${getCommandDisplayName(command)}`}
+            label={t("Reorder {name}", { name: getCommandDisplayName(command) })}
             {dragDisabled}
             onDragStart={startDrag}
             {onMoveUp}

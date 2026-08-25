@@ -7,6 +7,7 @@ import {
 	type FileOpeningSettings,
 } from "../../../utils/fileOpeningDefaults";
 import type { FileViewMode2, OpenLocation } from "../../../types/fileOpening";
+import { t } from "src/i18n";
 
 /**
  * Replaces ChoiceBuilder.addFileOpeningSetting. Conditional rows (split
@@ -26,26 +27,26 @@ let {
 // same point the imperative addFileOpeningSetting normalized. (#1130 review)
 fileOpening = normalizeFileOpening(fileOpening);
 
-const locationOptions = [
-	{ value: "reuse", label: "Reuse current tab" },
-	{ value: "tab", label: "New tab" },
-	{ value: "split", label: "Split pane" },
-	{ value: "window", label: "New window" },
-	{ value: "left-sidebar", label: "Left sidebar" },
-	{ value: "right-sidebar", label: "Right sidebar" },
-];
+const locationOptions = $derived([
+	{ value: "reuse", label: t("Reuse current tab") },
+	{ value: "tab", label: t("New tab") },
+	{ value: "split", label: t("Split pane") },
+	{ value: "window", label: t("New window") },
+	{ value: "left-sidebar", label: t("Left sidebar") },
+	{ value: "right-sidebar", label: t("Right sidebar") },
+]);
 
-const directionOptions = [
-	{ value: "vertical", label: "Split right" },
-	{ value: "horizontal", label: "Split down" },
-];
+const directionOptions = $derived([
+	{ value: "vertical", label: t("Split right") },
+	{ value: "horizontal", label: t("Split down") },
+]);
 
-const modeOptions = [
-	{ value: "source", label: "Source" },
-	{ value: "preview", label: "Preview" },
-	{ value: "live", label: "Live Preview" },
-	{ value: "default", label: "Default" },
-];
+const modeOptions = $derived([
+	{ value: "source", label: t("Source") },
+	{ value: "preview", label: t("Preview") },
+	{ value: "live", label: t("Live Preview") },
+	{ value: "default", label: t("Default") },
+]);
 
 const modeValue = $derived(
 	typeof fileOpening.mode === "string" ? (fileOpening.mode as string) : "default",
@@ -53,8 +54,8 @@ const modeValue = $derived(
 </script>
 
 <SettingItem
-	name="File opening location"
-	desc={`Where to open the ${contextLabel} file`}
+	name={t("File opening location")}
+	desc={t("Where to open the {contextLabel} file", { contextLabel })}
 >
 	{#snippet control()}
 		<Dropdown
@@ -67,8 +68,8 @@ const modeValue = $derived(
 
 {#if fileOpening.location === "split"}
 	<SettingItem
-		name="Split direction"
-		desc="How to arrange the new pane relative to the current one"
+		name={t("Split direction")}
+		desc={t("How to arrange the new pane relative to the current one")}
 	>
 		{#snippet control()}
 			<Dropdown
@@ -81,7 +82,7 @@ const modeValue = $derived(
 	</SettingItem>
 {/if}
 
-<SettingItem name="View mode" desc="How to display the opened file">
+<SettingItem name={t("View mode")} desc={t("How to display the opened file")}>
 	{#snippet control()}
 		<Dropdown
 			value={modeValue}
@@ -93,8 +94,8 @@ const modeValue = $derived(
 
 {#if fileOpening.location !== "reuse"}
 	<SettingItem
-		name="Focus new pane"
-		desc="Focus the opened tab immediately after opening"
+		name={t("Focus new pane")}
+		desc={t("Focus the opened tab immediately after opening")}
 	>
 		{#snippet control()}
 			<Toggle bind:checked={fileOpening.focus} />

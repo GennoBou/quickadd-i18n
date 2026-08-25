@@ -6,6 +6,7 @@ import { AIAssistantProvidersModal } from "./AIAssistantProvidersModal";
 import { populateModelDropdown } from "./modelSelect";
 import { GenericTextSuggester } from "./suggesters/genericTextSuggester";
 import { getAllFolderPathsInVault } from "src/utilityObsidian";
+import { t } from "src/i18n";
 
 type AIAssistantSettings = QuickAddSettings["ai"];
 
@@ -38,7 +39,7 @@ export class AIAssistantSettingsModal extends Modal {
 		this.contentEl.addClass("qa-ai-scroll-content");
 
 		this.contentEl.createEl("h2", {
-			text: "AI Assistant settings",
+			text: t("AI Assistant settings"),
 			cls: "qa-modal-title",
 		});
 
@@ -59,10 +60,10 @@ export class AIAssistantSettingsModal extends Modal {
 
 	addProvidersSetting(container: HTMLElement) {
 		new Setting(container)
-			.setName("Providers")
-			.setDesc("The providers for the AI Assistant")
+			.setName(t("Providers"))
+			.setDesc(t("The providers for the AI Assistant"))
 			.addButton((button) => {
-				button.setButtonText("Edit providers").onClick(() => {
+				button.setButtonText(t("Edit providers")).onClick(() => {
 					void new AIAssistantProvidersModal(
 						this.settings.providers,
 						this.app
@@ -75,8 +76,8 @@ export class AIAssistantSettingsModal extends Modal {
  
 	addDefaultModelSetting(container: HTMLElement) {
 		new Setting(container)
-			.setName("Default model")
-			.setDesc("The default model for the AI Assistant")
+			.setName(t("Default model"))
+			.setDesc(t("The default model for the AI Assistant"))
 			.addDropdown((dropdown) => {
 				populateModelDropdown(
 					dropdown,
@@ -94,8 +95,8 @@ export class AIAssistantSettingsModal extends Modal {
 
 	addPromptTemplateFolderPathSetting(container: HTMLElement) {
 		new Setting(container)
-			.setName("Prompt template folder path")
-			.setDesc("Path to your folder with prompt templates")
+			.setName(t("Prompt template folder path"))
+			.setDesc(t("Path to your folder with prompt templates"))
 			.addText((text) => {
 				text.setValue(this.settings.promptTemplatesFolderPath).onChange(
 					(value) => {
@@ -113,8 +114,8 @@ export class AIAssistantSettingsModal extends Modal {
 
 	addShowAssistantSetting(container: HTMLElement) {
 		new Setting(container)
-			.setName("Show assistant")
-			.setDesc("Show status messages from the AI Assistant")
+			.setName(t("Show assistant"))
+			.setDesc(t("Show status messages from the AI Assistant"))
 			.addToggle((toggle) => {
 				toggle.setValue(this.settings.showAssistant);
 				toggle.onChange((value) => {
@@ -125,14 +126,14 @@ export class AIAssistantSettingsModal extends Modal {
 
 	addConfirmToolCallsSetting(container: HTMLElement) {
 		new Setting(container)
-			.setName("Confirm AI tool calls")
+			.setName(t("Confirm AI tool calls"))
 			.setDesc(
-				"When an AI agent runs script-defined or built-in tools, ask before executing. 'Destructive only' confirms tools not marked read-only; 'Always' confirms every tool; 'Never' defers to each tool's own setting. A tool that requires approval is always confirmed regardless.",
+				t("When an AI agent runs script-defined or built-in tools, ask before executing. 'Destructive only' confirms tools not marked read-only; 'Always' confirms every tool; 'Never' defers to each tool's own setting. A tool that requires approval is always confirmed regardless."),
 			)
 			.addDropdown((dropdown) => {
-				dropdown.addOption("destructive", "Destructive tools only (recommended)");
-				dropdown.addOption("always", "Always confirm every tool");
-				dropdown.addOption("never", "Never (use each tool's own setting)");
+				dropdown.addOption("destructive", t("Destructive tools only (recommended)"));
+				dropdown.addOption("always", t("Always confirm every tool"));
+				dropdown.addOption("never", t("Never (use each tool's own setting)"));
 				dropdown.setValue(this.settings.confirmToolCalls ?? "destructive");
 				dropdown.onChange((value) => {
 					this.settings.confirmToolCalls =
@@ -143,8 +144,8 @@ export class AIAssistantSettingsModal extends Modal {
 
 	addDefaultSystemPromptSetting(contentEl: HTMLElement) {
 		new Setting(contentEl)
-			.setName("Default system prompt")
-			.setDesc("The default system prompt for the AI Assistant");
+			.setName(t("Default system prompt"))
+			.setDesc(t("The default system prompt for the AI Assistant"));
 
 		const textAreaComponent = new TextAreaComponent(contentEl);
 		textAreaComponent.inputEl.addClass("qa-ai-prompt-textarea");
@@ -153,7 +154,7 @@ export class AIAssistantSettingsModal extends Modal {
 		// the "Default system prompt" name above.
 		textAreaComponent.inputEl.setAttribute(
 			"aria-label",
-			"Default system prompt",
+			t("Default system prompt"),
 		);
 
 		// No format preview and no `{{` token autocomplete here: the system prompt

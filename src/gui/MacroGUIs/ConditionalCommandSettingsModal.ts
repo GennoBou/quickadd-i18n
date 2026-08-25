@@ -18,6 +18,7 @@ import {
 	loadScriptCandidates,
 	noteScriptError,
 } from "./scriptCandidates";
+import { t } from "../../i18n";
 
 function cloneCondition(condition: ConditionalCondition): ConditionalCondition {
 	return condition.mode === "variable"
@@ -92,7 +93,7 @@ export class ConditionalCommandSettingsModal extends Modal {
 		this.contentEl.empty();
 
 		const headerEl = this.contentEl.createEl("h2", {
-			text: "Configure conditional command",
+			text: t("Configure conditional command"),
 		});
 		headerEl.addClass("qa-modal-title");
 
@@ -108,12 +109,12 @@ export class ConditionalCommandSettingsModal extends Modal {
 
 	private renderModeSelector() {
 		new Setting(this.contentEl)
-			.setName("Condition type")
-			.setDesc("Choose how this condition should be evaluated.")
+			.setName(t("Condition type"))
+			.setDesc(t("Choose how this condition should be evaluated."))
 			.addDropdown((dropdown) => {
 				dropdown
-					.addOption("variable", "Macro variable")
-					.addOption("script", "Run script")
+					.addOption("variable", t("Macro variable"))
+					.addOption("script", t("Run script"))
 					.setValue(this.workingCommand.condition.mode)
 					.onChange((value) => {
 						if (value === this.workingCommand.condition.mode) return;
@@ -137,8 +138,8 @@ export class ConditionalCommandSettingsModal extends Modal {
 
 	private renderVariableNameSetting(condition: VariableCondition) {
 		new Setting(this.contentEl)
-			.setName("Variable name")
-			.setDesc("Name of the macro variable to inspect (without the $ prefix).")
+			.setName(t("Variable name"))
+			.setDesc(t("Name of the macro variable to inspect (without the $ prefix)."))
 			.addText((text) =>
 				text
 					.setPlaceholder("e.g. projectStatus")
@@ -151,21 +152,21 @@ export class ConditionalCommandSettingsModal extends Modal {
 
 	private renderOperatorSetting(condition: VariableCondition) {
 		const operators: Array<{ value: VariableCondition["operator"]; label: string }> = [
-			{ value: "equals", label: "Equals" },
-			{ value: "notEquals", label: "Does not equal" },
-			{ value: "lessThan", label: "Less than" },
-			{ value: "lessThanOrEqual", label: "Less than or equal" },
-			{ value: "greaterThan", label: "Greater than" },
-			{ value: "greaterThanOrEqual", label: "Greater than or equal" },
-			{ value: "contains", label: "Contains" },
-			{ value: "notContains", label: "Does not contain" },
-			{ value: "isTruthy", label: "Is truthy" },
-			{ value: "isFalsy", label: "Is falsy" },
+			{ value: "equals", label: t("Equals") },
+			{ value: "notEquals", label: t("Does not equal") },
+			{ value: "lessThan", label: t("Less than") },
+			{ value: "lessThanOrEqual", label: t("Less than or equal") },
+			{ value: "greaterThan", label: t("Greater than") },
+			{ value: "greaterThanOrEqual", label: t("Greater than or equal") },
+			{ value: "contains", label: t("Contains") },
+			{ value: "notContains", label: t("Does not contain") },
+			{ value: "isTruthy", label: t("Is truthy") },
+			{ value: "isFalsy", label: t("Is falsy") },
 		];
 
 		new Setting(this.contentEl)
-			.setName("Operator")
-			.setDesc("How to compare the variable value.")
+			.setName(t("Operator"))
+			.setDesc(t("How to compare the variable value."))
 			.addDropdown((dropdown: DropdownComponent) => {
 				dropdown.addOptions(
 					operators.reduce<Record<string, string>>((acc, option) => {
@@ -189,13 +190,13 @@ export class ConditionalCommandSettingsModal extends Modal {
 
 	private renderValueTypeSetting(condition: VariableCondition) {
 		new Setting(this.contentEl)
-			.setName("Value type")
-			.setDesc("How to interpret the comparison value.")
+			.setName(t("Value type"))
+			.setDesc(t("How to interpret the comparison value."))
 			.addDropdown((dropdown) => {
 				dropdown
-					.addOption("string", "Text")
-					.addOption("number", "Number")
-					.addOption("boolean", "Boolean")
+					.addOption("string", t("Text"))
+					.addOption("number", t("Number"))
+					.addOption("boolean", t("Boolean"))
 					.setValue(condition.valueType)
 					.onChange((value) => {
 						condition.valueType = value as VariableCondition["valueType"];
@@ -207,12 +208,12 @@ export class ConditionalCommandSettingsModal extends Modal {
 	private renderExpectedValueSetting(condition: VariableCondition) {
 		if (condition.valueType === "boolean") {
 			new Setting(this.contentEl)
-				.setName("Expected value")
-				.setDesc("Choose true or false.")
+				.setName(t("Expected value"))
+				.setDesc(t("Choose true or false."))
 				.addDropdown((dropdown) => {
 					dropdown
-						.addOption("true", "True")
-						.addOption("false", "False")
+						.addOption("true", t("True"))
+						.addOption("false", t("False"))
 						.setValue(condition.expectedValue ?? "true")
 						.onChange((value) => {
 							condition.expectedValue = value;
@@ -222,11 +223,11 @@ export class ConditionalCommandSettingsModal extends Modal {
 		}
 
 		new Setting(this.contentEl)
-			.setName("Expected value")
-			.setDesc("Value to compare against.")
+			.setName(t("Expected value"))
+			.setDesc(t("Value to compare against."))
 			.addText((text: TextComponent) => {
 				text
-					.setPlaceholder("Enter comparison value")
+					.setPlaceholder(t("Enter comparison value"))
 					.setValue(condition.expectedValue ?? "")
 					.onChange((value) => {
 						condition.expectedValue = value;
@@ -243,8 +244,8 @@ export class ConditionalCommandSettingsModal extends Modal {
 		let input: TextComponent;
 
 		new Setting(this.contentEl)
-			.setName("Script path")
-			.setDesc("Vault-relative path to a .js file or a note with a ```js code block.")
+			.setName(t("Script path"))
+			.setDesc(t("Vault-relative path to a .js file or a note with a ```js code block."))
 			.addText((text) => {
 				input = text;
 				text
@@ -256,8 +257,8 @@ export class ConditionalCommandSettingsModal extends Modal {
 			})
 			.addButton((button) =>
 				button
-					.setButtonText("Browse")
-					.setTooltip("Select a script (.js file or note)")
+					.setButtonText(t("Browse"))
+					.setTooltip(t("Select a script (.js file or note)"))
 					.onClick(async () => {
 						// Refresh so notes/scripts created while this modal is open appear.
 						this.loadScriptCandidates();
@@ -275,8 +276,8 @@ export class ConditionalCommandSettingsModal extends Modal {
 							paths,
 							{
 								placeholder:
-									"Select a script (.js file or note with a ```js block)",
-								emptyStateText: "No scripts found in your vault",
+									t("Select a script (.js file or note with a ```js block)"),
+								emptyStateText: t("No scripts found in your vault"),
 							}
 						);
 
@@ -306,8 +307,8 @@ export class ConditionalCommandSettingsModal extends Modal {
 
 	private renderScriptExportSetting(condition: ScriptCondition) {
 		new Setting(this.contentEl)
-			.setName("Export name")
-			.setDesc("Optional export or member to call (use :: to access nested members).")
+			.setName(t("Export name"))
+			.setDesc(t("Optional export or member to call (use :: to access nested members)."))
 			.addText((text) =>
 				text
 					.setPlaceholder("default")
@@ -324,7 +325,7 @@ export class ConditionalCommandSettingsModal extends Modal {
 		});
 
 		new ButtonComponent(buttonContainer)
-			.setButtonText("Cancel")
+			.setButtonText(t("Cancel"))
 			.onClick(() => {
 				this.resolve(null);
 				this.close();
@@ -332,7 +333,7 @@ export class ConditionalCommandSettingsModal extends Modal {
 
 		new ButtonComponent(buttonContainer)
 			.setCta()
-			.setButtonText("Save")
+			.setButtonText(t("Save"))
 			.onClick(() => {
 				if (!this.validateCondition()) return;
 				this.applyChanges();
@@ -345,14 +346,14 @@ export class ConditionalCommandSettingsModal extends Modal {
 		const condition = this.workingCommand.condition;
 		if (condition.mode === "variable") {
 			if (!condition.variableName.trim()) {
-				new Notice("QuickAdd: Enter a variable name before saving.");
+				new Notice(t("QuickAdd: Enter a variable name before saving."));
 				return false;
 			}
 			return true;
 		}
 
 		if (!condition.scriptPath.trim()) {
-			new Notice("QuickAdd: Enter a script path before saving.");
+			new Notice(t("QuickAdd: Enter a script path before saving."));
 			return false;
 		}
 		return true;

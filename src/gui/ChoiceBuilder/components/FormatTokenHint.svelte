@@ -1,5 +1,6 @@
 <script lang="ts">
 import { DOCS_URLS } from "../../../docs";
+import { t } from "src/i18n";
 
 /**
  * Advertises the format-token autocomplete under a format field (issue #1542).
@@ -24,12 +25,12 @@ const shown = $derived(!value.includes("{{"));
 
 {#if shown}
 	<div class="qa-token-hint">
-		Type <code>&#123;&#123;</code> to insert a token &middot;
+		{t("Type {openBraces} to insert a token ·", { openBraces: "{{" })}
 		<a
 			class="quickadd-docs-link"
 			href={DOCS_URLS.formatSyntax}
 			target="_blank"
-			rel="noopener noreferrer">Format syntax</a
+			rel="noopener noreferrer">{t("Format syntax")}</a
 		>
 	</div>
 {/if}

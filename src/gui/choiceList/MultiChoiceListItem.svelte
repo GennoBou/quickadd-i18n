@@ -12,6 +12,7 @@
 	import { renderChoiceName } from "./renderChoiceName";
     import { childChoicesOf, hasUnreadableChildren } from "../../utils/choiceUtils";
     import type { ChoiceListActions } from "./choiceListActions";
+    import { t } from "src/i18n";
 
     let {
         choice,
@@ -149,7 +150,7 @@
             type="button"
             class="multiChoiceListItemName"
             aria-expanded={!choice.collapsed}
-            aria-label={`Toggle ${choice.name}`}
+            aria-label={t("Toggle {name}", { name: choice.name })}
             use:stopDragInit
             onclick={toggleCollapsed}
         >
@@ -194,8 +195,7 @@
                          happened instead, in the same slot the ordinary empty-folder
                          hint uses, and leave rename/move/delete working. -->
                     <p class="qaUnreadableFolder">
-                        QuickAdd couldn't read this folder's contents. They're still
-                        in <code>data.json</code>.
+                        {t("QuickAdd couldn't read this folder's contents. They're still in data.json.")}
                     </p>
                 {:else}
                 <ChoiceList

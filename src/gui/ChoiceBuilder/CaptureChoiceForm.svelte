@@ -20,6 +20,7 @@ import OnePageOverrideSetting from "./components/OnePageOverrideSetting.svelte";
 import CaptureTargetSetting from "./components/CaptureTargetSetting.svelte";
 import WritePositionSetting from "./components/WritePositionSetting.svelte";
 import ChoiceIconSetting from "./components/ChoiceIconSetting.svelte";
+import { t } from "src/i18n";
 
 /**
  * Reactive replacement for CaptureChoiceBuilder.display(). Every conditional row
@@ -54,19 +55,19 @@ function validateTemplate(
 	// only resolves when the capture runs, so show a neutral hint rather than
 	// flagging it "not found" (issue #620).
 	if (hasTemplatePathSyntax(value)) {
-		return { valid: true, message: "Contains format syntax — resolved at run time." };
+		return { valid: true, message: t("Contains format syntax — resolved at run time.") };
 	}
 	// Resolve like the engine does at run time rather than requiring
 	// suggestion-list membership (templates outside the configured folders are
 	// valid). Mirrors templateChoiceBuilder (master #1170/#1325).
-	return getTemplateFile(app, value) !== null || "Template not found";
+	return getTemplateFile(app, value) !== null || t("Template not found");
 }
 
-const selectionOptions = [
-	{ value: "", label: "Follow global setting" },
-	{ value: "enabled", label: "Use selection" },
-	{ value: "disabled", label: "Ignore selection" },
-];
+const selectionOptions = $derived([
+	{ value: "", label: t("Follow global setting") },
+	{ value: "enabled", label: t("Use selection") },
+	{ value: "disabled", label: t("Ignore selection") },
+]);
 const selectionOverride = $derived(
 	typeof choice.useSelectionAsCaptureValue === "boolean"
 		? choice.useSelectionAsCaptureValue
@@ -91,11 +92,11 @@ function onTemplaterAfterCaptureChange(value: boolean) {
 
 <ChoiceNameHeader bind:name={choice.name} {app} />
 
-<SettingItem name="Location" heading />
+<SettingItem name={t("Location")} heading />
 <CaptureTargetSetting bind:choice {app} {plugin} />
 
 {#if !choice.captureToActiveFile}
-	<SettingItem name="Create file if it doesn't exist">
+	<SettingItem name={t("Create file if it doesn't exist")}>
 		{#snippet control()}
 			<Toggle bind:checked={choice.createFileIfItDoesntExist.enabled} />
 		{/snippet}
@@ -103,8 +104,8 @@ function onTemplaterAfterCaptureChange(value: boolean) {
 
 	{#if choice.createFileIfItDoesntExist.enabled}
 		<LabeledField
-			name="Create file with a template"
-			desc="Path to the template QuickAdd applies to the new file."
+			name={t("Create file with a template")}
+			desc={t("Path to the template QuickAdd applies to the new file.")}
 			bodyVisible={choice.createFileIfItDoesntExist.createWithTemplate}
 		>
 			{#snippet control()}
@@ -116,7 +117,7 @@ function onTemplaterAfterCaptureChange(value: boolean) {
 				<ValidatedInput
 					{id}
 					value={choice.createFileIfItDoesntExist.template}
-					placeholder="Template path"
+					placeholder={t("Template path")}
 					{app}
 					suggestions={templateFilePaths}
 					maxSuggestions={50}
@@ -129,14 +130,14 @@ function onTemplaterAfterCaptureChange(value: boolean) {
 	{/if}
 {/if}
 
-<SettingItem name="Position" heading />
+<SettingItem name={t("Position")} heading />
 <WritePositionSetting bind:choice {app} {plugin} />
 
-<SettingItem name="Linking" heading />
-<AppendLinkSetting bind:appendLink={choice.appendLink} fileLabel="captured" {app} />
+<SettingItem name={t("Linking")} heading />
+<AppendLinkSetting bind:appendLink={choice.appendLink} fileLabel={t("captured")} {app} />
 <SettingItem
-	name="Copy link to clipboard"
-	desc="Copy a link to the captured file after the Capture choice runs."
+	name={t("Copy link to clipboard")}
+	desc={t("Copy a link to the captured file after the Capture choice runs.")}
 >
 	{#snippet control()}
 		<Toggle
@@ -146,16 +147,16 @@ function onTemplaterAfterCaptureChange(value: boolean) {
 	{/snippet}
 </SettingItem>
 
-<SettingItem name="Content" heading />
-<SettingItem name="Task" desc="Formats the value as a task.">
+<SettingItem name={t("Content")} heading />
+<SettingItem name={t("Task")} desc={t("Formats the value as a task.")}>
 	{#snippet control()}
 		<Toggle bind:checked={choice.task} />
 	{/snippet}
 </SettingItem>
 
 <LabeledField
-	name="Capture format"
-	desc={"Set the format of the capture. When off, QuickAdd captures {{VALUE}} on its own - what you type at the prompt, or the current selection."}
+	name={t("Capture format")}
+	desc={t("Set the format of the capture. When off, QuickAdd captures {{VALUE}} on its own - what you type at the prompt, or the current selection.")}
 	bodyVisible={choice.format.enabled}
 >
 	{#snippet control()}
@@ -166,9 +167,9 @@ function onTemplaterAfterCaptureChange(value: boolean) {
 			{id}
 			inputKind="textarea"
 			bind:value={choice.format.format}
-			placeholder="Format"
+			placeholder={t("Format")}
 			required
-			requiredMessage="Capture format is required when enabled"
+			requiredMessage={t("Capture format is required when enabled")}
 			makeSuggesters={formatSuggesters}
 		/>
 		<FormatTokenHint value={choice.format.format} />
@@ -176,17 +177,17 @@ function onTemplaterAfterCaptureChange(value: boolean) {
 	{/snippet}
 </LabeledField>
 
-<SettingItem name="Behavior" heading />
+<SettingItem name={t("Behavior")} heading />
 {#if !choice.captureToActiveFile}
-	<OpenFileSetting bind:openFile={choice.openFile} description="Open the captured file." />
+	<OpenFileSetting bind:openFile={choice.openFile} description={t("Open the captured file.")} />
 	{#if choice.openFile}
-		<FileOpeningSetting bind:fileOpening={choice.fileOpening} contextLabel="captured" />
+		<FileOpeningSetting bind:fileOpening={choice.fileOpening} contextLabel={t("captured")} />
 	{/if}
 {/if}
 
 <SettingItem
-	name="Use editor selection as default value"
-	desc={"Controls whether this Capture uses the current editor selection as {{VALUE}}. Does not affect {{SELECTED}}."}
+	name={t("Use editor selection as default value")}
+	desc={t("Controls whether this Capture uses the current editor selection as {{VALUE}}. Does not affect {{SELECTED}}.")}
 >
 	{#snippet control()}
 		<Dropdown
@@ -198,8 +199,8 @@ function onTemplaterAfterCaptureChange(value: boolean) {
 </SettingItem>
 
 <SettingItem
-	name="Run Templater on entire destination file after capture"
-	desc="Advanced / legacy: this executes any <% %> anywhere in the destination file (including inside code blocks)."
+	name={t("Run Templater on entire destination file after capture")}
+	desc={t("Advanced / legacy: this executes any <% %> anywhere in the destination file (including inside code blocks).")}
 >
 	{#snippet control()}
 		<Toggle

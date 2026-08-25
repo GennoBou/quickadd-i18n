@@ -4,6 +4,7 @@ import type QuickAdd from "../../../main";
 import { FormatDisplayFormatter } from "../../../formatters/formatDisplayFormatter";
 import { FileNameDisplayFormatter } from "../../../formatters/fileNameDisplayFormatter";
 import type { PreviewDiagnostic } from "../../../formatters/previewDiagnostics";
+import { t } from "src/i18n";
 
 /**
  * Live "Preview: …" row for a format/filename field, plus any problems that pass
@@ -175,7 +176,7 @@ $effect(() => {
 			if (token !== previewToken) return;
 			preview = current;
 			diagnostics = [
-				{ severity: "error", message: "Preview unavailable." },
+				{ severity: "error", message: t("Preview unavailable.") },
 			];
 		}
 	})();
@@ -208,10 +209,10 @@ $effect(() => {
 	>
 		<span class="qa-preview-label"
 			>{isUnresolved
-				? "Unresolved: "
+				? t("Unresolved: ")
 				: isInvalid
-					? "Won't be created: "
-					: "Preview: "}</span
+					? t("Won't be created: ")
+					: t("Preview: ")}</span
 		><span class="qa-preview-value" aria-live="polite">{preview}</span>
 	</div>
 	{#if showDiagnostics && diagnostics.length > 0}
@@ -230,7 +231,7 @@ $effect(() => {
 					     "did this resolve at all" - is carried by the Preview/Unresolved
 					     label above. -->
 					<span class="qa-visually-hidden"
-						>{diagnostic.severity === "error" ? "Error: " : "Warning: "}</span
+						>{diagnostic.severity === "error" ? t("Error: ") : t("Warning: ")}</span
 					>{diagnostic.message}
 				</div>
 			{/each}

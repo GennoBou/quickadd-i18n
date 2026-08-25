@@ -8,6 +8,7 @@ import SettingItem from "../../components/SettingItem.svelte";
 import Dropdown from "../../components/Dropdown.svelte";
 import InsertAfterFields from "./InsertAfterFields.svelte";
 import InsertBeforeFields from "./InsertBeforeFields.svelte";
+import { t } from "src/i18n";
 
 /**
  * Reactive port of captureChoiceBuilder.addWritePositionSetting. The write-position
@@ -44,17 +45,17 @@ const current = $derived.by(() => {
 });
 
 const options = $derived([
-	{ value: "top", label: isActiveFile ? "At cursor" : "Top of file" },
+	{ value: "top", label: isActiveFile ? t("At cursor") : t("Top of file") },
 	...(isActiveFile
 		? [
-				{ value: "activeTop", label: "Top of file (after frontmatter)" },
-				{ value: "newLineAbove", label: "New line above cursor" },
-				{ value: "newLineBelow", label: "New line below cursor" },
+				{ value: "activeTop", label: t("Top of file (after frontmatter)") },
+				{ value: "newLineAbove", label: t("New line above cursor") },
+				{ value: "newLineBelow", label: t("New line below cursor") },
 			]
 		: []),
-	{ value: "after", label: "After line…" },
-	{ value: "before", label: "Before line…" },
-	{ value: "bottom", label: "Bottom of file" },
+	{ value: "after", label: t("After line…") },
+	{ value: "before", label: t("Before line…") },
+	{ value: "bottom", label: t("Bottom of file") },
 ]);
 
 function onWritePositionChange(value: string) {
@@ -135,10 +136,10 @@ const showCanvasNotice = $derived.by(() => {
 </script>
 
 <SettingItem
-	name="Write position"
+	name={t("Write position")}
 	desc={isActiveFile
-		? "Where to place the capture in the current file."
-		: "Where to place the capture in the target file."}
+		? t("Where to place the capture in the current file.")
+		: t("Where to place the capture in the target file.")}
 >
 	{#snippet control()}
 		<Dropdown value={current} {options} onchange={onWritePositionChange} />
@@ -155,8 +156,6 @@ const showCanvasNotice = $derived.by(() => {
 
 {#if showCanvasNotice}
 	<div class="setting-item-description">
-		Canvas note: 'At cursor' and 'New line above/below cursor' are not supported
-		for Canvas card capture. Use top, bottom, insert-after, or insert-before
-		placement.
+		{t("Canvas note: 'At cursor' and 'New line above/below cursor' are not supported for Canvas card capture. Use top, bottom, insert-after, or insert-before placement.")}
 	</div>
 {/if}

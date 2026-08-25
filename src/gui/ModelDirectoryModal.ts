@@ -3,6 +3,7 @@ import { Modal, Notice, Setting } from "obsidian";
 import type { AIProvider, Model } from "src/ai/Provider";
 import { discoverProviderModels } from "src/ai/modelDiscoveryService";
 import { resolveProviderApiKey } from "src/ai/providerSecrets";
+import { t } from "src/i18n";
 
 export class ModelDirectoryModal extends Modal {
   public waitForClose: Promise<{ imported: Model[]; mode: "add" | "replace" } | null>;
@@ -39,7 +40,7 @@ export class ModelDirectoryModal extends Modal {
       this.loadError = null;
     } catch (err) {
       this.loadError = `${(err as { message?: string }).message ?? err}`;
-      new Notice(`Failed to load model directory: ${this.loadError}`);
+      new Notice(t("Failed to load model directory: {error}", { error: this.loadError }));
     }
   }
 
@@ -49,15 +50,15 @@ export class ModelDirectoryModal extends Modal {
     this.contentEl.addClass("qa-ai-scroll-content");
 
     this.contentEl.createEl("h2", {
-      text: `Browse models for ${this.provider.name}`,
+      text: t("Browse models for {name}", { name: this.provider.name }),
       cls: "qa-modal-title",
     });
 
     // Search/filter
     new Setting(this.contentEl)
-      .setName("Search")
+      .setName(t("Search"))
       .addText((text) => {
-        text.setPlaceholder("Filter by name").onChange((value) => {
+        text.setPlaceholder(t("Filter by name")).onChange((value) => {
           const q = value.trim().toLowerCase();
           this.filtered = this.allModels.filter((m) => m.name.toLowerCase().includes(q));
           this.renderList();
@@ -65,7 +66,7 @@ export class ModelDirectoryModal extends Modal {
       })
       .addExtraButton((btn) => {
         btn.setIcon("check");
-        btn.setTooltip("Select all");
+        btn.setTooltip(t("Select all"));
         btn.onClick(() => {
           this.filtered.forEach((m) => this.selectedIds.add(m.name));
           this.renderList();
@@ -73,7 +74,7 @@ export class ModelDirectoryModal extends Modal {
       })
       .addExtraButton((btn) => {
         btn.setIcon("x");
-        btn.setTooltip("Clear selection");
+        btn.setTooltip(t("Clear selection"));
         btn.onClick(() => {
           this.selectedIds.clear();
           this.renderList();
@@ -82,16 +83,16 @@ export class ModelDirectoryModal extends Modal {
 
     // Mode toggle
     new Setting(this.contentEl)
-      .setName("Import mode")
-      .setDesc("Add will append new models. Replace will overwrite existing models with the selected list.")
+      .setName(t("Import mode"))
+      .setDesc(t("Add will append new models. Replace will overwrite existing models with the selected list."))
       .addDropdown((dd) => {
-        dd.addOption("add", "Add only");
-        dd.addOption("replace", "Replace existing");
+        dd.addOption("add", t("Add only"));
+        dd.addOption("replace", t("Replace existing"));
         dd.setValue(this.mode);
         dd.onChange((v) => (this.mode = v as "add" | "replace"));
       })
       .addButton((b) => {
-        b.setButtonText("Import selected").setCta().onClick(() => this.importSelected());
+        b.setButtonText(t("Import selected")).setCta().onClick(() => this.importSelected());
       });
 
     // List container
@@ -107,10 +108,10 @@ export class ModelDirectoryModal extends Modal {
 
     if (this.filtered.length === 0) {
       const message = this.loadError
-        ? `Couldn't load models: ${this.loadError}. Check the API key and endpoint.`
+        ? t("Couldn't load models: {error}. Check the API key and endpoint.", { error: this.loadError })
         : this.allModels.length === 0
-          ? "No models available for this provider."
-          : "No models match your filter.";
+          ? t("No models available for this provider.")
+          : t("No models match your filter.");
       (list as HTMLElement).createDiv({
         text: message,
         cls: "qa-model-directory-empty",
@@ -137,7 +138,7 @@ export class ModelDirectoryModal extends Modal {
       row.createDiv({ text: m.name, cls: "qa-model-row-title" });
 
       row.createDiv({
-        text: `${m.maxTokens.toLocaleString()} tokens max`,
+        text: t("{count} tokens max", { count: m.maxTokens.toLocaleString() }),
         cls: "qa-model-row-meta",
       });
     }
@@ -145,21 +146,21 @@ export class ModelDirectoryModal extends Modal {
 
   private importSelected() {
     if (this.selectedIds.size === 0) {
-      new Notice("Select at least one model.");
+      new Notice(t("Select at least one model."));
       return;
     }
     try {
       const selection = this.allModels.filter((m) => this.selectedIds.has(m.name));
       const qaModels = selection.map((model) => ({ ...model }));
       if (!qaModels.length) {
-        new Notice("No models selected to import.");
+        new Notice(t("No models selected to import."));
         return;
       }
       this.resolved = true;
       this.resolvePromise({ imported: qaModels, mode: this.mode });
       this.close();
     } catch (err) {
-      new Notice(`Import failed: ${(err as { message?: string }).message ?? err}`);
+      new Notice(t("Import failed: {error}", { error: (err as { message?: string }).message ?? String(err) }));
     }
   }
 

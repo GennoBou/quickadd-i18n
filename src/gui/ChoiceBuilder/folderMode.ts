@@ -84,19 +84,26 @@ export function applyFolderMode(
 	}
 }
 
-export const folderModeOptions: { value: FolderMode; label: string }[] = [
-	{ value: "obsidian-default", label: "Obsidian default" },
-	{ value: "specified", label: "In a specific folder" },
-	{ value: "active-file", label: "Same folder as current file" },
-	{ value: "prompt", label: "Ask for folder each time" },
+import { t } from "src/i18n";
+
+export const folderModeOptions: { readonly value: FolderMode; readonly label: string }[] = [
+	{ value: "obsidian-default", get label() { return t("Obsidian default"); } },
+	{ value: "specified", get label() { return t("In a specific folder"); } },
+	{ value: "active-file", get label() { return t("Same folder as current file"); } },
+	{ value: "prompt", get label() { return t("Ask for folder each time"); } },
 ];
 
 export const folderModeDescriptions: Record<FolderMode, string> = {
-	"obsidian-default":
-		"Use Obsidian's “Default location for new notes” setting.",
-	specified:
-		"Create the note in the folder(s) below. With multiple folders, you'll be asked which one when the note is created.",
-	"active-file":
-		"Create the note next to the currently active file (falls back to the vault root if no file is open).",
-	prompt: "Choose any folder in the vault when the note is created.",
+	get "obsidian-default"() {
+		return t("Use Obsidian's “Default location for new notes” setting.");
+	},
+	get specified() {
+		return t("Create the note in the folder(s) below. With multiple folders, you'll be asked which one when the note is created.");
+	},
+	get "active-file"() {
+		return t("Create the note next to the currently active file (falls back to the vault root if no file is open).");
+	},
+	get prompt() {
+		return t("Choose any folder in the vault when the note is created.");
+	},
 };

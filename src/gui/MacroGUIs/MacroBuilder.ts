@@ -25,6 +25,7 @@ import {
 } from "../../utils/macroUtils";
 import type { ICommand } from "../../types/macros/ICommand";
 import { v4 as uuidv4 } from "uuid";
+import { t } from "../../i18n";
 
 /** Exported for the malformed-tree sweep (src/utils/malformedChoices.entrypoints.test.ts). */
 export function getChoicesAsList(nestedChoices: IChoice[]): IChoice[] {
@@ -100,7 +101,7 @@ export class MacroBuilder extends Modal {
 		const renameButton = headerEl.createEl("button", {
 			cls: "qa-rename-title-button",
 			text: header,
-			attr: { type: "button", "aria-label": `Rename ${header}` },
+			attr: { type: "button", "aria-label": t("Rename {name}", { name: header }) },
 		});
 
 		renameButton.addEventListener("click", () => {
@@ -108,7 +109,7 @@ export class MacroBuilder extends Modal {
 				try {
 					const newName: string = await GenericInputPrompt.Prompt(
 						this.app,
-						`Update name for ${this.choice.name}`,
+						t("Update name for {name}", { name: this.choice.name }),
 						this.choice.name,
 						this.choice.name
 					);
@@ -129,8 +130,8 @@ export class MacroBuilder extends Modal {
 
 	private addRunOnStartupSetting(): void {
 		new Setting(this.contentEl)
-			.setName("Run on startup")
-			.setDesc("Execute this macro when Obsidian starts")
+			.setName(t("Run on startup"))
+			.setDesc(t("Execute this macro when Obsidian starts"))
 			.addToggle(toggle => toggle
 				.setValue(this.choice.runOnStartup)
 				.onChange(value => {
@@ -224,12 +225,12 @@ export class MacroBuilder extends Modal {
 		command: IConditionalCommand,
 		branch: "then" | "else"
 	): Promise<boolean> {
-		const title = branch === "then" ? "Then branch" : "Else branch";
+		const title = branch === "then" ? t("Then branch") : t("Else branch");
 		const modal = new ConditionalBranchEditorModal({
 			app: this.app,
 			plugin: this.plugin,
 			choices: this.choices,
-			title: `Edit ${title} commands`,
+			title: t("Edit {title} commands", { title }),
 			commands: branch === "then" ? command.thenCommands : command.elseCommands,
 			conditionalHandlers: this.buildConditionalHandlers(),
 		});

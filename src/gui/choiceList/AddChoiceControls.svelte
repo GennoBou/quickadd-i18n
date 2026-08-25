@@ -3,6 +3,7 @@
 	import type { ChoiceType } from "../../types/choices/choiceType";
 	import ObsidianIcon from "../components/ObsidianIcon.svelte";
 	import { DOER_CHOICE_TYPES, defaultChoiceName } from "./choiceTypeMeta";
+	import { t } from "src/i18n";
 
 	let {
 		onAddChoice,
@@ -80,17 +81,17 @@
 
 	// Per-folder (compact) controls read as "Add choice"/"Add folder" text links;
 	// the global controls read as "New choice"/"New folder" buttons.
-	const newChoiceText = $derived(compact ? "Add choice" : "New choice");
-	const newFolderText = $derived(compact ? "Add folder" : "New folder");
+	const newChoiceText = $derived(compact ? t("Add choice") : t("New choice"));
+	const newFolderText = $derived(compact ? t("Add folder") : t("New folder"));
 
 	// WCAG 2.5.3 (Label in Name): the accessible name must CONTAIN the visible
 	// text. Per folder we name the target ("Add choice to {folder}"), which keeps
 	// "Add choice" as a substring.
 	const newChoiceLabel = $derived(
-		targetFolderName ? `Add choice to ${targetFolderName}` : newChoiceText,
+		targetFolderName ? t("Add choice to {name}", { name: targetFolderName }) : newChoiceText,
 	);
 	const newFolderLabel = $derived(
-		targetFolderName ? `Add folder to ${targetFolderName}` : newFolderText,
+		targetFolderName ? t("Add folder to {name}", { name: targetFolderName }) : newFolderText,
 	);
 </script>
 

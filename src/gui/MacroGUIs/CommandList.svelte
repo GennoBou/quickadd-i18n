@@ -31,6 +31,7 @@ import ConditionalCommand from "./Components/ConditionalCommand.svelte";
 import type { IWaitCommand } from "../../types/macros/QuickCommands/IWaitCommand";
 import type { INestedChoiceCommand } from "../../types/macros/QuickCommands/INestedChoiceCommand";
 import type { IConditionalCommand } from "../../types/macros/Conditional/IConditionalCommand";
+import { t } from "src/i18n";
 
 let {
 	commands = $bindable([]),
@@ -183,7 +184,11 @@ function moveCommand(id: string, direction: -1 | 1) {
 	// autoAriaDisabled silences the library's own move alerts, so announce the
 	// keyboard reorder ourselves.
 	alertToScreenReader(
-		`Moved ${getCommandDisplayName(moved)} to position ${target + 1} of ${list.length}`,
+		t("Moved {name} to position {pos} of {total}", {
+			name: getCommandDisplayName(moved),
+			pos: target + 1,
+			total: list.length,
+		}),
 	);
 }
 
@@ -239,7 +244,7 @@ function getChoiceBuilder(choice: IChoice) {
 async function configureScript(command: IUserScript) {
 	const userScript = await getUserScript(command, app);
 	if (!userScript) {
-		log.logWarning(`${command.name} could not be loaded.`);
+		log.logWarning(t("{name} could not be loaded.", { name: command.name }));
 		return;
 	}
 

@@ -14,6 +14,7 @@ import FormatPreviewField from "./FormatPreviewField.svelte";
 import FormatTokenHint from "./FormatTokenHint.svelte";
 import CanvasNodePicker from "./CanvasNodePicker.svelte";
 import { getCaptureTargetFeedback } from "./captureTargetFeedback";
+import { t } from "src/i18n";
 
 /** Reactive port of captureChoiceBuilder.addCapturedToSetting. */
 let {
@@ -112,7 +113,7 @@ function validateCaptureTo(value: string) {
 		if (!value.trim()) {
 			return {
 				valid: true,
-				message: "Leave empty to pick the note each time this choice runs.",
+				message: t("Leave empty to pick the note each time this choice runs."),
 			};
 		}
 		return true;
@@ -127,8 +128,8 @@ function validateCaptureTo(value: string) {
 </script>
 
 <SettingItem
-	name="Capture to active file"
-	desc="Capture into whichever note is open when the choice runs, instead of a fixed target."
+	name={t("Capture to active file")}
+	desc={t("Capture into whichever note is open when the choice runs, instead of a fixed target.")}
 >
 	{#snippet control()}
 		<Toggle
@@ -140,8 +141,8 @@ function validateCaptureTo(value: string) {
 
 {#if !choice.captureToActiveFile}
 	<LabeledField
-		name="Capture to"
-		desc={"Vault-relative path to a file or folder, a #tag, or property:field=value. Supports format syntax like {{DATE}}; end with '/' to capture into a folder."}
+		name={t("Capture to")}
+		desc={t("Vault-relative path to a file or folder, a #tag, or property:field=value. Supports format syntax like {{DATE}}; end with '/' to capture into a folder.")}
 	>
 		{#snippet children(id)}
 			<ValidatedInput
@@ -170,23 +171,23 @@ function validateCaptureTo(value: string) {
 
 	{#if isCanvasTarget}
 		<SettingItem
-			name="Target canvas node"
-			desc="Choose a card from the canvas below, or paste an exact node id."
+			name={t("Target canvas node")}
+			desc={t("Choose a card from the canvas below, or paste an exact node id.")}
 		>
 			{#snippet control()}
 				<ValidatedInput
 					value={choice.captureToCanvasNodeId ?? ""}
-					placeholder="Canvas node id"
-					ariaLabel="Canvas node id"
+					placeholder={t("Canvas node id")}
+					ariaLabel={t("Canvas node id")}
 					required
-					requiredMessage="A canvas capture target requires a node id — pick a card below or paste an exact node id."
+					requiredMessage={t("A canvas capture target requires a node id — pick a card below or paste an exact node id.")}
 					onChange={(value) => (choice.captureToCanvasNodeId = value.trim())}
 				/>
 			{/snippet}
 		</SettingItem>
 
 		<div class="qa-canvas-node-helper">
-			Tip: open this canvas and select one card to grab its id instantly.
+			{t("Tip: open this canvas and select one card to grab its id instantly.")}
 		</div>
 
 		{#key choice.captureTo}

@@ -2,6 +2,7 @@
 import type { App } from "obsidian";
 import ObsidianIcon from "../../components/ObsidianIcon.svelte";
 import { promptRenameChoice } from "../../choiceRename";
+import { t } from "src/i18n";
 
 /**
  * Centered, clickable choice-name heading with a rename affordance. The rename
@@ -27,7 +28,7 @@ async function rename() {
 	<button
 		type="button"
 		class="choiceNameHeaderButton qa-rename-title-button"
-		aria-label={`Rename ${name}`}
+		aria-label={t("Rename {name}", { name })}
 		onclick={rename}
 	>
 		<span class="choiceNameHeaderText">{name}</span>

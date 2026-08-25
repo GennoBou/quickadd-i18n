@@ -1,6 +1,7 @@
 <script lang="ts">
     import IconButton from "../components/IconButton.svelte";
     import DragHandle from "../components/DragHandle.svelte";
+    import { t } from "src/i18n";
 
     let {
         dragDisabled,
@@ -37,7 +38,7 @@
     {#if showConfigureButton}
         <IconButton
             iconId="settings"
-            label={`Configure${choiceName ? " " + choiceName : ""}`}
+            label={choiceName ? t("Configure {name}", { name: choiceName }) : t("Configure")}
             extraClass="qa-row-secondary-action"
             onclick={onConfigureChoice}
         />
@@ -46,7 +47,7 @@
     {#if showDuplicateButton}
         <IconButton
             iconId="copy"
-            label={`Duplicate${choiceName ? " " + choiceName : ""}`}
+            label={choiceName ? t("Duplicate {name}", { name: choiceName }) : t("Duplicate")}
             extraClass="qa-row-secondary-action"
             onclick={onDuplicateChoice}
         />
@@ -54,7 +55,7 @@
 
     <IconButton
         iconId="trash-2"
-        label={`Delete${choiceName ? " " + choiceName : ""}`}
+        label={choiceName ? t("Delete {name}", { name: choiceName }) : t("Delete")}
         extraClass="qa-row-secondary-action"
         onclick={onDeleteChoice}
     />
@@ -63,7 +64,7 @@
         <IconButton
             iconId="more-vertical"
             ariaHasPopup="menu"
-            label={`More options${choiceName ? " for " + choiceName : ""}`}
+            label={choiceName ? t("More options for {name}", { name: choiceName }) : t("More options")}
             onclick={(e) => onOpenMenu?.(e.currentTarget as HTMLElement)}
         />
     {/if}
@@ -76,13 +77,13 @@
     <IconButton
         iconId="zap"
         ariaPressed={commandEnabled}
-        label={`Command palette${choiceName ? ": " + choiceName : ""}`}
+        label={choiceName ? t("Command palette: {name}", { name: choiceName }) : t("Command palette")}
         extraClass="qa-row-secondary-action"
         onclick={onToggleCommand}
     />
 
     <DragHandle
-        label={`Reorder${choiceName ? " " + choiceName : ""}`}
+        label={choiceName ? t("Reorder {name}", { name: choiceName }) : t("Reorder")}
         {dragDisabled}
         onDragStart={onDragHandleDown}
         {onMoveUp}

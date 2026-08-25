@@ -3,6 +3,7 @@
   import { settingsStore } from "../../settingsStore";
   import { FormatSyntaxSuggester } from "../suggesters/formatSyntaxSuggester";
   import type QuickAdd from "../../main";
+  import { t } from "src/i18n";
 
   let { app, plugin }: { app: App; plugin: QuickAdd } = $props();
 
@@ -109,17 +110,17 @@
   <!-- No panel title: this view is mounted directly under the "Global
        variables" settings group heading, which already names it. -->
   <div class="qa-gv__desc">
-    Define reusable snippets referenced as <code>&#123;&#123;GLOBAL_VAR:&lt;name&gt;&#125;&#125;</code>. Snippets support other QuickAdd tokens and expand before VALUE/VDATE/etc.
+    {t("Define reusable snippets referenced as {token}. Snippets support other QuickAdd tokens and expand before VALUE/VDATE/etc.", { token: "{{GLOBAL_VAR:<name>}}" })}
   </div>
 
   <div class="qa-gv__table">
     {#if items.length === 0}
-      <div class="qa-gv__empty">No global variables yet.</div>
+      <div class="qa-gv__empty">{t("No global variables yet.")}</div>
     {:else}
     <div class="qa-gv__row qa-gv__row--head">
-      <div class="qa-gv__cell qa-gv__name">Name</div>
-      <div class="qa-gv__cell qa-gv__value">Value</div>
-      <div class="qa-gv__cell qa-gv__ops">Actions</div>
+      <div class="qa-gv__cell qa-gv__name">{t("Name")}</div>
+      <div class="qa-gv__cell qa-gv__value">{t("Value")}</div>
+      <div class="qa-gv__cell qa-gv__ops">{t("Actions")}</div>
     </div>
     {/if}
     {#each items as it, idx (idx)}
@@ -129,17 +130,17 @@
                  use:attachSuggester
                  bind:value={it.name}
                  oninput={() => { debouncedPersist(it); }}
-                 placeholder="Name" />
+                 placeholder={t("Name")} />
         </div>
         <div class="qa-gv__cell qa-gv__value">
           <textarea rows="2"
                     use:attachSuggester
                     bind:value={it.value}
                     oninput={() => debouncedPersist(it)}
-                    placeholder="Snippet value (supports QuickAdd tokens)"></textarea>
+                    placeholder={t("Snippet value (supports QuickAdd tokens)")}></textarea>
         </div>
         <div class="qa-gv__cell qa-gv__ops">
-          <button class="qa-gv__btn danger" title="Delete" onclick={() => deleteVariable(items.indexOf(it))}>Delete</button>
+          <button class="qa-gv__btn danger" title={t("Delete")} onclick={() => deleteVariable(items.indexOf(it))}>{t("Delete")}</button>
         </div>
       </div>
     {/each}
@@ -148,7 +149,7 @@
   <!-- Below the list, matching the sibling "Template folder paths" row and the
        choices list, which both put their add affordance under what it adds to. -->
   <div class="qa-gv__actions">
-    <button class="mod-cta" onclick={addVariable}>Add variable</button>
+    <button class="mod-cta" onclick={addVariable}>{t("Add variable")}</button>
   </div>
 </div>
 

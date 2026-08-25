@@ -1,6 +1,7 @@
 <script lang="ts">
     import IconButton from "../components/IconButton.svelte";
     import type { FolderListProps } from "./folderListProps.svelte";
+    import { t } from "src/i18n";
 
     let { folders, deleteFolder }: FolderListProps = $props();
 </script>
@@ -11,7 +12,7 @@
             <span>{folder}</span>
             <IconButton
                 iconId="trash-2"
-                label={`Remove folder ${folder}`}
+                label={t("Remove folder {folder}", { folder })}
                 onclick={() => deleteFolder(folder)}
             />
         </div>

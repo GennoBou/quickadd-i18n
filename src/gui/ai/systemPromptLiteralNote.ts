@@ -33,8 +33,7 @@
  * negative costs a silently broken prompt.
  */
 
-const LITERAL_NOTE_TEXT =
-	"QuickAdd sends the system prompt to the model as written - format syntax like {{DATE}} is not resolved here. Only the prompt template is formatted.";
+import { t } from "src/i18n";
 
 /** Distinguishes the notes of two modals open at once, and across `reload()`. */
 let noteSequence = 0;
@@ -53,7 +52,7 @@ export function mountSystemPromptLiteralNote(
 	initialValue: string,
 ): (value: string) => void {
 	const note = container.createEl("div", {
-		text: LITERAL_NOTE_TEXT,
+		text: t("QuickAdd sends the system prompt to the model as written - format syntax like {{DATE}} is not resolved here. Only the prompt template is formatted."),
 		cls: "qa-literal-format-note",
 	});
 	const noteId = `qa-literal-format-note-${++noteSequence}`;

@@ -7,6 +7,7 @@ import {
 	requestUrl,
 } from "obsidian";
 import { log } from "src/logger/logManager";
+import { t } from "src/i18n";
 
 type Release = {
 	tag_name: string;
@@ -220,7 +221,7 @@ export class UpdateModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.createEl("h1", {
-			text: "Fetching release notes...",
+			text: t("Fetching release notes..."),
 		});
 		// Always offer a reachable exit, even while fetching or if the fetch fails.
 		this.addCloseFooter();
@@ -237,7 +238,7 @@ export class UpdateModal extends Modal {
 	private addCloseFooter(): void {
 		const footer = this.contentEl.createDiv("quickadd-update-modal-footer");
 		new ButtonComponent(footer)
-			.setButtonText("Done")
+			.setButtonText(t("Done"))
 			.setCta()
 			.onClick(() => this.close());
 	}
@@ -254,7 +255,7 @@ export class UpdateModal extends Modal {
 		contentEl.empty();
 		contentEl.classList.add("quickadd-update-modal-container");
 
-        const header = `### New in QuickAdd v${this.releases[0].tag_name}\n`
+        const header = t("### New in QuickAdd v{version}", { version: this.releases[0].tag_name }) + "\n";
 		const text = `Thank you for using QuickAdd! If you like the plugin, please consider supporting me by buying me a coffee. With your sponsorship, I'll be able to contribute more to my existing projects, start new ones, and be more responsive to issues & feature requests.`;
 		const buymeacoffee = `<div class="quickadd-bmac-container"><a href="https://www.buymeacoffee.com/chhoumann" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 40px !important;width: 144px !important;" ></a></div>`;
 
@@ -263,7 +264,7 @@ export class UpdateModal extends Modal {
 			.map((release) => renderVideoAttachments(release.body ?? ""))
 			.join("\n---\n");
 
-		const andNow = `And now, here is everything new in QuickAdd since your last update (v${this.previousVersion}):`;
+		const andNow = t("And now, here is everything new in QuickAdd since your last update (v{version}):", { version: this.previousVersion });
         const feedbackForm = `I'd love to get your feedback on QuickAdd! Please fill out this <a href="https://forms.gle/WRq1ewcKK8qmkqps6">feedback form</a> to let me know what you think.`;
 		const markdownStr = `${header}\n${text}\n${buymeacoffee}\n${feedbackForm}\n\n${andNow}\n\n---\n\n${addExtraHashToHeadings(
 			releaseNotes

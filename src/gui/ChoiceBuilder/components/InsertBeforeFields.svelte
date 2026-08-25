@@ -16,6 +16,7 @@ import Dropdown from "../../components/Dropdown.svelte";
 import ValidatedInput from "./ValidatedInput.svelte";
 import LabeledField from "./LabeledField.svelte";
 import FormatPreviewField from "./FormatPreviewField.svelte";
+import { t } from "src/i18n";
 
 /** Reactive port of captureChoiceBuilder.addInsertBeforeFields. */
 let {
@@ -46,24 +47,24 @@ const suggesters = [
 		new FormatSyntaxSuggester(app, el, plugin, "lineTarget"),
 ];
 
-const createLocationOptions = [
-	{ value: CREATE_IF_NOT_FOUND_TOP, label: "Top" },
-	{ value: CREATE_IF_NOT_FOUND_BOTTOM, label: "Bottom" },
-	{ value: CREATE_IF_NOT_FOUND_CURSOR, label: "Cursor" },
-];
+const createLocationOptions = $derived([
+	{ value: CREATE_IF_NOT_FOUND_TOP, label: t("Top") },
+	{ value: CREATE_IF_NOT_FOUND_BOTTOM, label: t("Bottom") },
+	{ value: CREATE_IF_NOT_FOUND_CURSOR, label: t("Cursor") },
+]);
 </script>
 
 <LabeledField
-	name="Insert before"
-	desc="Insert capture before specified text. Accepts format syntax."
+	name={t("Insert before")}
+	desc={t("Insert capture before specified text. Accepts format syntax.")}
 >
 	{#snippet children(id)}
 		<ValidatedInput
 			{id}
 			bind:value={insertBefore.before}
-			placeholder="Insert before"
+			placeholder={t("Insert before")}
 			required
-			requiredMessage="Insert before text is required"
+			requiredMessage={t("Insert before text is required")}
 			makeSuggesters={suggesters}
 		/>
 		<FormatPreviewField value={insertBefore.before} formatterKind="lineTarget" {app} {plugin} />
@@ -71,8 +72,8 @@ const createLocationOptions = [
 </LabeledField>
 
 <SettingItem
-	name="Create line if not found"
-	desc="Creates the 'insert before' line if it is not found."
+	name={t("Create line if not found")}
+	desc={t("Creates the 'insert before' line if it is not found.")}
 >
 	{#snippet control()}
 		<Toggle bind:checked={insertBefore.createIfNotFound} />

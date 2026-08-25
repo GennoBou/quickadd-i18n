@@ -23,6 +23,7 @@ import {
 	VARIABLE_REGEX,
 } from "src/constants";
 import { transformCase } from "src/utils/caseTransform";
+import { t } from "src/i18n";
 
 export interface AIRequestLogEntry {
 	id: string;
@@ -290,13 +291,13 @@ export async function runAIAssistant(
 
 		notice.setMessage(
 			"waiting",
-			"QuickAdd is formatting the prompt template."
+			t("QuickAdd is formatting the prompt template.")
 		);
 		const formattedPrompt = await formatter(targetPrompt);
 
 		const promptingMsg = [
 			"prompting",
-			`Using prompt template "${targetKey}".`,
+			t('Using prompt template "{name}".', { name: targetKey }),
 		];
 		notice.setMessage(promptingMsg[0], promptingMsg[1]);
 
@@ -322,7 +323,7 @@ export async function runAIAssistant(
 			(time) => {
 				notice.setMessage(
 					"finished",
-					`Took ${(time / 1000).toFixed(2)}s.`
+					t("Took {seconds}s.", { seconds: (time / 1000).toFixed(2) })
 				);
 			}
 		);
@@ -403,11 +404,11 @@ export async function Prompt(
 
 		notice.setMessage(
 			"waiting",
-			"QuickAdd is formatting the prompt template."
+			t("QuickAdd is formatting the prompt template.")
 		);
 		const formattedPrompt = await formatter(prompt);
 
-		const promptingMsg = ["prompting", `Using custom prompt.`];
+		const promptingMsg = ["prompting", t("Using custom prompt.")];
 		notice.setMessage(promptingMsg[0], promptingMsg[1]);
 
 		const makeRequest = OpenAIRequest(
@@ -432,7 +433,7 @@ export async function Prompt(
 			(time) => {
 				notice.setMessage(
 					"finished",
-					`Took ${(time / 1000).toFixed(2)}s.`
+					t("Took {seconds}s.", { seconds: (time / 1000).toFixed(2) })
 				);
 			}
 		);
@@ -864,7 +865,7 @@ export async function ChunkedPrompt(
 
 		notice.setMessage(
 			"chunking",
-			"Creating prompt chunks with text and prompt template"
+			t("Creating prompt chunks with text and prompt template")
 		);
 
 		const chunkSeparator = settings.chunkSeparator || /\n/g;
@@ -939,7 +940,7 @@ export async function ChunkedPrompt(
 
 		const promptingMsg = [
 			"prompting",
-			`${chunkedText.length} prompts being sent.`,
+			t("{count} prompts being sent.", { count: chunkedText.length }),
 		];
 		notice.setMessage(promptingMsg[0], promptingMsg[1]);
 
@@ -1021,7 +1022,7 @@ export async function ChunkedPrompt(
 
 				notice.setMessage(
 					"prompting",
-					"Provider rejected a prompt for context length. Retrying with smaller chunks."
+					t("Provider rejected a prompt for context length. Retrying with smaller chunks.")
 				);
 
 				const [left, right] = split;
@@ -1047,7 +1048,7 @@ export async function ChunkedPrompt(
 			(time) => {
 				notice.setMessage(
 					"finished",
-					`Took ${(time / 1000).toFixed(2)}s.`
+					t("Took {seconds}s.", { seconds: (time / 1000).toFixed(2) })
 				);
 			}
 		);

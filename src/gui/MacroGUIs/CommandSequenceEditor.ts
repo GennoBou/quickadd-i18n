@@ -58,6 +58,7 @@ import {
 	normalizeCommandList,
 } from "../../utils/macroUtils";
 import DataUnreadable from "../svelte/DataUnreadable.svelte";
+import { t } from "../../i18n";
 
 type ConditionalHandler = (command: IConditionalCommand) => Promise<boolean>;
 
@@ -163,8 +164,8 @@ export class CommandSequenceEditor {
 		this.unreadableCardHandle = mountComponent(
 			cardEl,
 			DataUnreadable,
-			{ what: "this macro's commands" },
-			{ what: "this macro's commands" },
+			{ what: t("this macro's commands") },
+			{ what: t("this macro's commands") },
 		);
 	}
 
@@ -209,8 +210,8 @@ export class CommandSequenceEditor {
 
 				const promptAnswer: boolean = await GenericYesNoPrompt.Prompt(
 					this.app,
-					"Are you sure you wish to delete this command?",
-					`If you click yes, you will delete '${command.name}'.`
+					t("Are you sure you wish to delete this command?"),
+					t("If you click yes, you will delete '{name}'.", { name: command.name })
 				);
 				if (!promptAnswer) return;
 
@@ -220,7 +221,7 @@ export class CommandSequenceEditor {
 				);
 				if (!secretsCleared) {
 					new Notice(
-						"Could not clear user script secrets. Command was not deleted."
+						t("Could not clear user script secrets. Command was not deleted.")
 					);
 					return;
 				}
@@ -243,7 +244,7 @@ export class CommandSequenceEditor {
 			commandListEl,
 			CommandList,
 			this.commandListProps,
-			{ what: "this macro's commands" }
+			{ what: t("this macro's commands") }
 		);
 
 		return this.commandListHandle.ok;
@@ -289,12 +290,12 @@ export class CommandSequenceEditor {
 		};
 
 		new Setting(parent)
-			.setName("Obsidian command")
-			.setDesc("Add an Obsidian command")
+			.setName(t("Obsidian command"))
+			.setDesc(t("Add an Obsidian command"))
 			.addText((textComponent) => {
 				input = textComponent;
 				textComponent.inputEl.addClass("qa-command-sequence-input");
-				textComponent.setPlaceholder("Obsidian command");
+				textComponent.setPlaceholder(t("Obsidian command"));
 				new GenericTextSuggester(
 					this.app,
 					textComponent.inputEl,
@@ -311,7 +312,7 @@ export class CommandSequenceEditor {
 				);
 			})
 			.addButton((button) =>
-				button.setCta().setButtonText("Add").onClick(addObsidianCommandFromInput)
+				button.setCta().setButtonText(t("Add")).onClick(addObsidianCommandFromInput)
 			);
 	}
 
@@ -364,13 +365,13 @@ export class CommandSequenceEditor {
 		};
 
 		new Setting(parent)
-			.setName("Editor commands")
-			.setDesc("Add editor command")
+			.setName(t("Editor commands"))
+			.setDesc(t("Add editor command"))
 			.addDropdown((dropdown) => {
 				dropdownComponent = dropdown;
 				dropdown.selectEl.addClass("qa-command-sequence-input");
 				dropdown
-					.addOption("", "Select command")
+					.addOption("", t("Select command"))
 					.addOption(EditorCommandType.Copy, EditorCommandType.Copy)
 					.addOption(EditorCommandType.Cut, EditorCommandType.Cut)
 					.addOption(EditorCommandType.Paste, EditorCommandType.Paste)
@@ -404,7 +405,7 @@ export class CommandSequenceEditor {
 					);
 			})
 			.addButton((button) =>
-				button.setCta().setButtonText("Add").onClick(addEditorCommandFromDropdown)
+				button.setCta().setButtonText(t("Add")).onClick(addEditorCommandFromDropdown)
 			);
 	}
 
@@ -429,7 +430,7 @@ export class CommandSequenceEditor {
 			);
 			if (!resolved) {
 				new Notice(
-					`QuickAdd: No script or js-block note named "${value}" found.`
+					t("QuickAdd: No script or js-block note named \"{name}\" found.", { name: value })
 				);
 				return;
 			}
@@ -451,12 +452,12 @@ export class CommandSequenceEditor {
 		};
 
 		new Setting(parent)
-			.setName("User scripts")
-			.setDesc("Add a .js file or a note with a ```js code block - type the name or click Browse")
+			.setName(t("User scripts"))
+			.setDesc(t("Add a .js file or a note with a ```js code block - type the name or click Browse"))
 			.addText((textComponent) => {
 				input = textComponent;
 				textComponent.inputEl.addClass("qa-command-sequence-input");
-				textComponent.setPlaceholder("Start typing script name...");
+				textComponent.setPlaceholder(t("Start typing script name..."));
 
 				new GenericTextSuggester(
 					this.app,
@@ -475,8 +476,8 @@ export class CommandSequenceEditor {
 			})
 			.addButton((button) =>
 				button
-					.setButtonText("Browse")
-					.setTooltip("Browse and select a script (.js file or note)")
+					.setButtonText(t("Browse"))
+					.setTooltip(t("Browse and select a script (.js file or note)"))
 					.onClick(async () => {
 						const selected = await this.showScriptPicker();
 						if (selected) {
@@ -490,7 +491,7 @@ export class CommandSequenceEditor {
 			.addButton((button) => {
 				addButton = button;
 				button
-					.setButtonText("Add")
+					.setButtonText(t("Add"))
 					.setCta()
 					.onClick(() => void addUserScriptFromInput());
 				button.buttonEl.addClass("qa-hidden");
@@ -509,7 +510,7 @@ export class CommandSequenceEditor {
 			const value: string = input.getValue();
 			const choice = this.choices.find((c) => c.name === value);
 			if (!choice) {
-				new Notice(`QuickAdd: No choice named "${value}".`);
+				new Notice(t("QuickAdd: No choice named \"{name}\".", { name: value }));
 				return;
 			}
 
@@ -519,12 +520,12 @@ export class CommandSequenceEditor {
 		};
 
 		new Setting(parent)
-			.setName("Choices")
-			.setDesc("Add existing choice")
+			.setName(t("Choices"))
+			.setDesc(t("Add existing choice"))
 			.addText((textComponent) => {
 				input = textComponent;
 				textComponent.inputEl.addClass("qa-command-sequence-input");
-				textComponent.setPlaceholder("Choice");
+				textComponent.setPlaceholder(t("Choice"));
 				new GenericTextSuggester(
 					this.app,
 					textComponent.inputEl,
@@ -538,7 +539,7 @@ export class CommandSequenceEditor {
 				});
 			})
 			.addButton((button) =>
-				button.setCta().setButtonText("Add").onClick(addChoiceFromInput)
+				button.setCta().setButtonText(t("Add")).onClick(addChoiceFromInput)
 			);
 	}
 
@@ -550,7 +551,7 @@ export class CommandSequenceEditor {
 		const button: ButtonComponent = new ButtonComponent(container);
 		button
 			.setButtonText(typeName)
-			.setTooltip(`Add ${typeName} choice`)
+			.setTooltip(t("Add {typeName} choice", { typeName }))
 			.onClick(() => {
 				// NOT lowercased with the tooltip above: this is a persisted choice
 				// NAME, not a label, so changing it would only split existing and
@@ -564,7 +565,7 @@ export class CommandSequenceEditor {
 		const button: ButtonComponent = new ButtonComponent(container);
 		button
 			.setIcon("file-search")
-			.setTooltip("Add open file command")
+			.setTooltip(t("Add open file command"))
 			.onClick(() => {
 				this.addCommand(new OpenFileCommand());
 			});
@@ -574,7 +575,7 @@ export class CommandSequenceEditor {
 		const button: ButtonComponent = new ButtonComponent(container);
 		button
 			.setIcon("bot" as IconType)
-			.setTooltip("Add AI Assistant command")
+			.setTooltip(t("Add AI Assistant command"))
 			.onClick(() => {
 				this.addCommand(new AIAssistantCommand());
 			});
@@ -584,7 +585,7 @@ export class CommandSequenceEditor {
 		const button: ButtonComponent = new ButtonComponent(container);
 		button
 			.setIcon("clock")
-			.setTooltip("Add wait command")
+			.setTooltip(t("Add wait command"))
 			.onClick(() => {
 				this.addCommand(new WaitCommand(100));
 			});
@@ -594,7 +595,7 @@ export class CommandSequenceEditor {
 		const button: ButtonComponent = new ButtonComponent(container);
 		button
 			.setIcon("git-branch")
-			.setTooltip("Add conditional command")
+			.setTooltip(t("Add conditional command"))
 			.onClick(() => {
 				this.addCommand(new ConditionalCommand());
 			});
@@ -616,8 +617,8 @@ export class CommandSequenceEditor {
 			labels,
 			paths,
 			{
-				placeholder: "Select a script (.js file or note with a ```js block)",
-				emptyStateText: "No scripts found in your vault",
+				placeholder: t("Select a script (.js file or note with a ```js block)"),
+				emptyStateText: t("No scripts found in your vault"),
 			}
 		);
 

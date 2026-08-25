@@ -5,6 +5,7 @@ import { promptCancelled } from "../../errors/UserCancelError";
 import SearchableMultiSelect, {
 	type SearchableMultiSelectItem,
 } from "../SearchableMultiSelect/searchableMultiSelect";
+import { t } from "../../i18n";
 
 export interface MultiSuggesterOptions {
 	/** Modal title / prompt header. */
@@ -105,7 +106,7 @@ export default class MultiSuggester extends Modal {
 			"qaSearchableMultiSelectModal",
 			"qaMultiSuggester",
 		);
-		this.titleEl.setText(this.opts.placeholder ?? "Select one or more");
+		this.titleEl.setText(this.opts.placeholder ?? t("Select one or more"));
 		const { contentEl } = this;
 		contentEl.empty();
 
@@ -122,10 +123,10 @@ export default class MultiSuggester extends Modal {
 
 		if (this.opts.allowCustomValue) {
 			const customSetting = new Setting(contentEl)
-				.setName("Add a custom value")
+				.setName(t("Add a custom value"))
 				.addText((text) => {
 					text
-						.setPlaceholder("Not in the list…")
+						.setPlaceholder(t("Not in the list…"))
 						.setValue(this.draft)
 						.onChange((v) => (this.draft = v));
 					text.inputEl.addClass("qa-multi-custom-input");
@@ -140,7 +141,7 @@ export default class MultiSuggester extends Modal {
 					});
 				})
 				.addButton((btn) =>
-					btn.setButtonText("Add").onClick(() => this.commitDraft()),
+					btn.setButtonText(t("Add")).onClick(() => this.commitDraft()),
 				);
 			customSetting.settingEl.addClass("qa-multi-custom");
 		}
@@ -148,16 +149,16 @@ export default class MultiSuggester extends Modal {
 		const buttons = new Setting(contentEl);
 		buttons.settingEl.addClass("qa-multi-actions");
 		buttons.addButton((btn) =>
-			btn.setButtonText("Done").setCta().onClick(() => this.submit()),
+			btn.setButtonText(t("Done")).setCta().onClick(() => this.submit()),
 		);
 		buttons.addButton((btn) =>
-			btn.setButtonText("Cancel").onClick(() => this.close()),
+			btn.setButtonText(t("Cancel")).onClick(() => this.close()),
 		);
 		if (this.opts.skippable) {
 			buttons.addButton((btn) =>
 				btn
-					.setButtonText("Skip")
-					.setTooltip("Leave empty")
+					.setButtonText(t("Skip"))
+					.setTooltip(t("Leave empty"))
 					.onClick(() => {
 						this.skipped = true;
 						this.didSubmit = true;
@@ -192,14 +193,14 @@ export default class MultiSuggester extends Modal {
 	private commitDraft(): boolean {
 		const trimmed = this.draft.trim();
 		if (!trimmed) {
-			new Notice("Enter a value to add.");
+			new Notice(t("Enter a value to add."));
 			return false;
 		}
 		const alreadySelected =
 			(this.items.includes(trimmed) || this.customValues.includes(trimmed)) &&
 			this.selected.has(trimmed);
 		if (alreadySelected) {
-			new Notice(`"${trimmed}" is already added.`);
+			new Notice(t('"{value}" is already added.', { value: trimmed }));
 			return false;
 		}
 		if (

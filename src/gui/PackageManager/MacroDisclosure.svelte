@@ -1,23 +1,23 @@
 <script lang="ts">
 	import CapabilityTag from "./CapabilityTag.svelte";
 	import type { PreviewCommand } from "../../services/packagePreview";
+	import { t } from "src/i18n";
 
 	let { commands }: { commands: PreviewCommand[] } = $props();
 
-	const HUMAN_COMMAND_TYPE: Record<string, string> = {
-		UserScript: "User script",
-		Conditional: "Conditional",
-		NestedChoice: "Nested choice",
-		Obsidian: "Obsidian command",
-		Choice: "Choice",
-		Wait: "Wait",
-		EditorCommand: "Editor command",
-		AIAssistant: "AI assistant",
-		OpenFile: "Open file",
-	};
-
-	function humanCommandType(type: string): string {
-		return HUMAN_COMMAND_TYPE[type] ?? type;
+	function getHumanCommandType(type: string): string {
+		const types: Record<string, string> = {
+			UserScript: t("User script"),
+			Conditional: t("Conditional"),
+			NestedChoice: t("Nested choice"),
+			Obsidian: t("Obsidian command"),
+			Choice: t("Choice"),
+			Wait: t("Wait"),
+			EditorCommand: t("Editor command"),
+			AIAssistant: t("AI assistant"),
+			OpenFile: t("Open file"),
+		};
+		return types[type] ?? type;
 	}
 </script>
 
@@ -29,7 +29,7 @@
 				<CapabilityTag flag={command.flag} />
 			{:else}
 				<span class="macroCommandType"
-					>{humanCommandType(command.type)}</span
+					>{getHumanCommandType(command.type)}</span
 				>
 			{/if}
 			{#if command.scriptPath}

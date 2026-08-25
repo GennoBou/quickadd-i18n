@@ -19,6 +19,7 @@ import { commandListOf, isCommandLike } from "../utils/macroUtils";
 import { decodeFromBase64 } from "../utils/base64";
 import { extractScriptFromMarkdown } from "../utils/extractScriptFromMarkdown";
 import { MARKDOWN_FILE_EXTENSION_REGEX } from "../constants";
+import { t } from "../i18n";
 
 /**
  * Pure, App-free analysis of a QuickAdd package for the import preview.
@@ -65,105 +66,108 @@ interface FlagMeta {
 
 // One row per flag — severity, pill label, and hover description in lockstep so
 // adding a capability can't half-define it across parallel tables.
-const FLAG_META: Record<PreviewFlag, FlagMeta> = {
-	"user-script": {
-		severity: "critical",
-		label: "SCRIPT",
-		description: "Runs custom JavaScript with full access to your vault and the network.",
-	},
-	"conditional-script": {
-		severity: "critical",
-		label: "CONDITIONAL",
-		description: "Runs custom JavaScript to decide which branch executes.",
-	},
-	"bundled-script": {
-		severity: "critical",
-		label: "SCRIPT FILE",
-		description: "Bundles a file that will be written to your vault and can be run as code.",
-	},
-	"run-on-startup": {
-		severity: "critical",
-		label: "STARTUP",
-		description: "Runs automatically every time Obsidian starts.",
-	},
-	"mislabeled-executable": {
-		severity: "critical",
-		label: "EXECUTABLE",
-		description: "A bundled file is run as code even though it is labeled a template.",
-	},
-	"registers-command": {
-		severity: "warning",
-		label: "COMMAND",
-		description: "Adds a command to the command palette.",
-	},
-	"obsidian-command": {
-		severity: "warning",
-		label: "OBSIDIAN",
-		description: "Triggers another Obsidian command.",
-	},
-	ai: {
-		severity: "warning",
-		label: "AI",
-		description: "Sends note content to your AI provider over the network.",
-	},
-	"ai-tools": {
-		severity: "critical",
-		label: "AI TOOLS",
-		description:
-			"Lets an AI model read and write your vault: the script gives the model tools (functions) it calls with model-chosen arguments.",
-	},
-	"capture-writes": {
-		severity: "warning",
-		label: "WRITES",
-		description: "Writes captured text into your notes.",
-	},
-	"template-write": {
-		severity: "warning",
-		label: "TEMPLATE",
-		description: "Creates notes from a bundled template.",
-	},
-	"overwrites-existing-choice": {
-		severity: "warning",
-		label: "OVERWRITES",
-		description: "Replaces a choice that already exists in your vault.",
-	},
-	"overwrites-existing-file": {
-		severity: "warning",
-		label: "OVERWRITES",
-		description: "Overwrites a file that already exists in your vault.",
-	},
-	"missing-reference": {
-		severity: "warning",
-		label: "MISSING",
-		description: "References a file that is not bundled in this package.",
-	},
-	"unknown-command": {
-		severity: "warning",
-		label: "UNKNOWN",
-		description: "An unrecognised command type. Review it manually.",
-	},
-	"editor-command": {
-		severity: "info",
-		label: "EDITOR",
-		description: "Runs a built-in editor command.",
-	},
-	"open-file": {
-		severity: "info",
-		label: "OPEN FILE",
-		description: "Opens a file in your vault.",
-	},
-};
+function getFlagMeta(flag: PreviewFlag): FlagMeta {
+	const map: Record<PreviewFlag, FlagMeta> = {
+		"user-script": {
+			severity: "critical",
+			label: t("SCRIPT"),
+			description: t("Runs custom JavaScript with full access to your vault and the network."),
+		},
+		"conditional-script": {
+			severity: "critical",
+			label: t("CONDITIONAL"),
+			description: t("Runs custom JavaScript to decide which branch executes."),
+		},
+		"bundled-script": {
+			severity: "critical",
+			label: t("SCRIPT FILE"),
+			description: t("Bundles a file that will be written to your vault and can be run as code."),
+		},
+		"run-on-startup": {
+			severity: "critical",
+			label: t("STARTUP"),
+			description: t("Runs automatically every time Obsidian starts."),
+		},
+		"mislabeled-executable": {
+			severity: "critical",
+			label: t("EXECUTABLE"),
+			description: t("A bundled file is run as code even though it is labeled a template."),
+		},
+		"registers-command": {
+			severity: "warning",
+			label: t("COMMAND"),
+			description: t("Adds a command to the command palette."),
+		},
+		"obsidian-command": {
+			severity: "warning",
+			label: t("OBSIDIAN"),
+			description: t("Triggers another Obsidian command."),
+		},
+		ai: {
+			severity: "warning",
+			label: t("AI"),
+			description: t("Sends note content to your AI provider over the network."),
+		},
+		"ai-tools": {
+			severity: "critical",
+			label: t("AI TOOLS"),
+			description:
+				t("Lets an AI model read and write your vault: the script gives the model tools (functions) it calls with model-chosen arguments."),
+		},
+		"capture-writes": {
+			severity: "warning",
+			label: t("WRITES"),
+			description: t("Writes captured text into your notes."),
+		},
+		"template-write": {
+			severity: "warning",
+			label: t("TEMPLATE"),
+			description: t("Creates notes from a bundled template."),
+		},
+		"overwrites-existing-choice": {
+			severity: "warning",
+			label: t("OVERWRITES"),
+			description: t("Replaces a choice that already exists in your vault."),
+		},
+		"overwrites-existing-file": {
+			severity: "warning",
+			label: t("OVERWRITES"),
+			description: t("Overwrites a file that already exists in your vault."),
+		},
+		"missing-reference": {
+			severity: "warning",
+			label: t("MISSING"),
+			description: t("References a file that is not bundled in this package."),
+		},
+		"unknown-command": {
+			severity: "warning",
+			label: t("UNKNOWN"),
+			description: t("An unrecognised command type. Review it manually."),
+		},
+		"editor-command": {
+			severity: "info",
+			label: t("EDITOR"),
+			description: t("Runs a built-in editor command."),
+		},
+		"open-file": {
+			severity: "info",
+			label: t("OPEN FILE"),
+			description: t("Opens a file in your vault."),
+		},
+	};
+	return map[flag];
+}
 
 export function flagSeverity(flag: PreviewFlag): PreviewSeverity {
-	return FLAG_META[flag].severity;
+	return getFlagMeta(flag).severity;
 }
 
 export function flagLabel(flag: PreviewFlag): string {
-	return FLAG_META[flag].label;
+	return getFlagMeta(flag).label;
 }
 
 export function flagDescription(flag: PreviewFlag): string {
-	return FLAG_META[flag].description;
+	return getFlagMeta(flag).description;
 }
 
 function isScriptKind(kind: QuickAddPackageAssetKind): boolean {
@@ -465,7 +469,7 @@ function collectChoice(
 			walk.rows.push({
 				flag: "run-on-startup",
 				severity: "critical",
-				title: "Runs automatically every time Obsidian starts",
+				title: t("Runs automatically every time Obsidian starts"),
 				detail: joinCrumb(crumbs),
 			});
 		}
@@ -553,7 +557,7 @@ function collectCommands(
 					walk.rows.push({
 						flag: "user-script",
 						severity: "critical",
-						title: "Runs custom JavaScript with full access to your vault and the network",
+						title: t("Runs custom JavaScript with full access to your vault and the network"),
 						detail: `${joinCrumb(commandCrumbs)} (${script.path})`,
 						scriptPath: script.path,
 					});
@@ -587,7 +591,7 @@ function collectCommands(
 					walk.rows.push({
 						flag: "conditional-script",
 						severity: "critical",
-						title: "Runs custom JavaScript chosen by a condition",
+						title: t("Runs custom JavaScript chosen by a condition"),
 						detail: `${joinCrumb(commandCrumbs)} (${scriptPath})`,
 						scriptPath,
 					});
@@ -631,7 +635,7 @@ function collectCommands(
 				walk.rows.push({
 					flag: "obsidian-command",
 					severity: "warning",
-					title: "Triggers another Obsidian command",
+					title: t("Triggers another Obsidian command"),
 					detail: `${joinCrumb(commandCrumbs)}${
 						obsidian.commandId ? ` (${obsidian.commandId})` : ""
 					}`,
@@ -644,7 +648,7 @@ function collectCommands(
 				walk.rows.push({
 					flag: "ai",
 					severity: "warning",
-					title: "Sends note content to your AI provider over the network",
+					title: t("Sends note content to your AI provider over the network"),
 					detail: joinCrumb(commandCrumbs),
 				});
 				break;
@@ -676,7 +680,7 @@ function collectCommands(
 					walk.rows.push({
 						flag: "unknown-command",
 						severity: "warning",
-						title: "Unknown capability. Review it manually.",
+						title: t("Unknown capability. Review it manually."),
 						detail: `${joinCrumb(commandCrumbs)} (${String(command.type)})`,
 					});
 				} else {
@@ -823,7 +827,7 @@ export function buildPackagePreview(
 		capabilityRows.push({
 			flag: "mislabeled-executable",
 			severity: "critical",
-			title: "Runs a file as code even though it is labeled a template",
+			title: t("Runs a file as code even though it is labeled a template"),
 			detail: file.originalPath,
 			scriptPath: file.originalPath,
 		});
@@ -841,7 +845,7 @@ export function buildPackagePreview(
 		capabilityRows.push({
 			flag: "bundled-script",
 			severity: "critical",
-			title: "Bundles a file that will be written to your vault and can be run as code",
+			title: t("Bundles a file that will be written to your vault and can be run as code"),
 			detail: file.originalPath,
 			scriptPath: file.originalPath,
 		});
@@ -859,7 +863,7 @@ export function buildPackagePreview(
 		capabilityRows.push({
 			flag: "ai-tools",
 			severity: "critical",
-			title: "Lets an AI model read and write your vault",
+			title: t("Lets an AI model read and write your vault"),
 			detail: file.originalPath,
 			scriptPath: file.originalPath,
 		});
@@ -870,10 +874,8 @@ export function buildPackagePreview(
 		capabilityRows.push({
 			flag: "registers-command",
 			severity: "warning",
-			title: "Adds commands to the command palette",
-			detail: `${registersCommandCount} choice${
-				registersCommandCount === 1 ? "" : "s"
-			}`,
+			title: t("Adds commands to the command palette"),
+			detail: t("{count} choices", { count: registersCommandCount }),
 		});
 	}
 
@@ -882,10 +884,8 @@ export function buildPackagePreview(
 		capabilityRows.push({
 			flag: "overwrites-existing-choice",
 			severity: "warning",
-			title: "Replaces choices that already exist in your vault",
-			detail: `${overwriteChoiceCount} choice${
-				overwriteChoiceCount === 1 ? "" : "s"
-			}`,
+			title: t("Replaces choices that already exist in your vault"),
+			detail: t("{count} choices", { count: overwriteChoiceCount }),
 		});
 	}
 
@@ -894,8 +894,8 @@ export function buildPackagePreview(
 		capabilityRows.push({
 			flag: "overwrites-existing-file",
 			severity: "warning",
-			title: "Overwrites existing files in your vault",
-			detail: `${overwriteFileCount} file${overwriteFileCount === 1 ? "" : "s"}`,
+			title: t("Overwrites existing files in your vault"),
+			detail: t("{count} files", { count: overwriteFileCount }),
 		});
 	}
 
@@ -908,11 +908,9 @@ export function buildPackagePreview(
 			severity: scriptMissing > 0 ? "critical" : "warning",
 			title:
 				scriptMissing > 0
-					? "References scripts that are not bundled, so they run from whatever exists at those paths after import"
-					: "References files that are not bundled and not in your vault",
-			detail: `${missingReferences.length} reference${
-				missingReferences.length === 1 ? "" : "s"
-			}`,
+					? t("References scripts that are not bundled, so they run from whatever exists at those paths after import")
+					: t("References files that are not bundled and not in your vault"),
+			detail: t("{count} references", { count: missingReferences.length }),
 		});
 	}
 

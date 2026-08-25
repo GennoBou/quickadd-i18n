@@ -15,6 +15,7 @@ import {
 	applyCompactPromptChrome,
 	stylePeekButton,
 } from "../promptPeek/stylePeekButton";
+import { t } from "../../i18n";
 
 export default class GenericInputPrompt extends Modal {
 	public waitForClose: Promise<string>;
@@ -142,7 +143,7 @@ export default class GenericInputPrompt extends Modal {
 
 		if (this.isOptionalPrompt) {
 			const hintEl = this.contentEl.createDiv({
-				text: "Optional — leave empty, press Skip, or ctrl/cmd+shift+↵.",
+				text: t("Optional — leave empty, press Skip, or ctrl/cmd+shift+↵."),
 				cls: "setting-item-description",
 			});
 			hintEl.setCssStyles({ marginBottom: "0.75rem" });
@@ -216,20 +217,20 @@ export default class GenericInputPrompt extends Modal {
 		const primary = buttonBarContainer.createDiv({
 			cls: "qa-prompt-actions-primary",
 		});
-		this.createButton(primary, "Ok", this.submitClickCallback)
+		this.createButton(primary, t("Ok"), this.submitClickCallback)
 			.setCta()
 			.buttonEl.setCssStyles({ marginRight: "0" });
-		this.createButton(primary, "Cancel", this.cancelClickCallback);
+		this.createButton(primary, t("Cancel"), this.cancelClickCallback);
 		if (this.isOptionalPrompt) {
 			const skipButton = this.createButton(
 				primary,
-				"Skip",
+				t("Skip"),
 				this.skipClickCallback,
 			);
-			skipButton.setTooltip("Leave this field empty");
+			skipButton.setTooltip(t("Leave this field empty"));
 			skipButton.buttonEl.setAttribute(
 				"aria-label",
-				"Skip and leave empty",
+				t("Skip and leave empty"),
 			);
 		}
 
@@ -238,7 +239,7 @@ export default class GenericInputPrompt extends Modal {
 				cls: "qa-prompt-actions-secondary",
 			});
 			stylePeekButton(
-				this.createButton(secondary, "Peek at note", () => this.peek.peek()),
+				this.createButton(secondary, t("Peek at note"), () => this.peek.peek()),
 			);
 		}
 	}

@@ -43,6 +43,7 @@
 	import { choiceNoun } from "../../utils/choiceNoun";
 	import { reportingHandler } from "../../utils/errorUtils";
 	import { type Plain, snapshot } from "../svelte/persist.svelte";
+	import { t } from "src/i18n";
 
 	let {
 		app,
@@ -369,7 +370,7 @@
 			commandRegistry.enableCommand(newChoice);
 		}
 		save();
-		new Notice(`Duplicated "${sourceChoice.name}".`);
+		new Notice(t("Duplicated “{name}”.", { name: sourceChoice.name }));
 		await revealChoice(newChoice.id);
 	}
 
@@ -496,17 +497,16 @@
 		     add controls are not rendered here, so there's no duplicate). -->
 		<div class="choiceEmptyState">
 			<ObsidianIcon iconId="folder-plus" size={28} />
-			<div class="choiceEmptyTitle">No choices yet</div>
+			<div class="choiceEmptyTitle">{t("No choices yet")}</div>
 			<p class="choiceEmptyBody">
-				A choice is an action QuickAdd can run: create a note, capture
-				text, or run a macro. Group them with folders.
+				{t("A choice is an action QuickAdd can run: create a note, capture text, or run a macro. Group them with folders.")}
 				<!-- The one place a brand-new user is guaranteed to look, so it
 				     carries the plugin's only prominent docs link (#1541). -->
 				<a
 					class="quickadd-docs-link"
 					href={DOCS_URLS.gettingStarted}
 					target="_blank"
-					rel="noopener noreferrer">Learn more</a
+					rel="noopener noreferrer">{t("Learn more")}</a
 				>
 			</p>
 			<div class="choiceEmptyActions">
@@ -521,7 +521,7 @@
 			<div class="search-input-container choiceFilterInput">
 				<input
 					type="search"
-					placeholder="Filter choices..."
+					placeholder={t("Filter choices...")}
 					bind:value={filterQuery}
 					autocapitalize="off"
 					autocorrect="off"
@@ -537,7 +537,7 @@
 				{#if filterQuery}
 					<button
 						class="search-input-clear-button qaFilterClearButton"
-						aria-label="Clear filter"
+						aria-label={t("Clear filter")}
 						onclick={() => (filterQuery = "")}
 					></button>
 				{/if}
@@ -555,7 +555,7 @@
 			{@const filtered = filterChoices(choices, filterQuery)}
 			{#if filtered.length === 0}
 				<div class="choiceFilterEmpty">
-					No choices match your filter.
+					{t("No choices match your filter.")}
 				</div>
 			{:else}
 				<ChoiceList
@@ -576,8 +576,8 @@
 				<button
 					type="button"
 					class="qaAIAssistantBtn clickable-icon"
-					aria-label="Configure AI Assistant"
-					title="Configure AI Assistant"
+					aria-label={t("Configure AI Assistant")}
+					title={t("Configure AI Assistant")}
 					onclick={openAISettings}
 				>
 					<ObsidianIcon iconId="sparkles" size={16} />

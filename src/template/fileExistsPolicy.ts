@@ -3,16 +3,37 @@ import {
 	CANVAS_FILE_EXTENSION_REGEX,
 	MARKDOWN_FILE_EXTENSION_REGEX,
 } from "src/constants";
+import { t } from "src/i18n";
 
 export const fileExistsBehaviorCategoryOptions = [
-	{ id: "prompt", label: "Ask every time" },
-	{ id: "update", label: "Update existing file" },
-	{ id: "create", label: "Create another file" },
-	{ id: "keep", label: "Keep existing file" },
-] as const;
+	{
+		id: "prompt" as const,
+		get label() {
+			return t("Ask every time");
+		},
+	},
+	{
+		id: "update" as const,
+		get label() {
+			return t("Update existing file");
+		},
+	},
+	{
+		id: "create" as const,
+		get label() {
+			return t("Create another file");
+		},
+	},
+	{
+		id: "keep" as const,
+		get label() {
+			return t("Keep existing file");
+		},
+	},
+];
 
 export type FileExistsBehaviorCategoryId =
-	(typeof fileExistsBehaviorCategoryOptions)[number]["id"];
+	"prompt" | "update" | "create" | "keep";
 export type FileExistsModeCategoryId = Exclude<
 	FileExistsBehaviorCategoryId,
 	"prompt"
@@ -20,57 +41,78 @@ export type FileExistsModeCategoryId = Exclude<
 
 export const fileExistsModes = [
 	{
-		id: "appendBottom",
-		category: "update",
-		label: "Append to bottom",
-		description: "Adds the template content to the end of the existing file.",
+		id: "appendBottom" as const,
+		category: "update" as const,
+		get label() {
+			return t("Append to bottom");
+		},
+		get description() {
+			return t("Adds the template content to the end of the existing file.");
+		},
 		requiresExistingFile: true,
-		resolutionKind: "modifyExisting",
+		resolutionKind: "modifyExisting" as const,
 	},
 	{
-		id: "appendTop",
-		category: "update",
-		label: "Append to top",
-		description:
-			"Adds the template content to the beginning of the existing file.",
+		id: "appendTop" as const,
+		category: "update" as const,
+		get label() {
+			return t("Append to top");
+		},
+		get description() {
+			return t("Adds the template content to the beginning of the existing file.");
+		},
 		requiresExistingFile: true,
-		resolutionKind: "modifyExisting",
+		resolutionKind: "modifyExisting" as const,
 	},
 	{
-		id: "overwrite",
-		category: "update",
-		label: "Overwrite file",
-		description: "Replaces the existing file content with the template.",
+		id: "overwrite" as const,
+		category: "update" as const,
+		get label() {
+			return t("Overwrite file");
+		},
+		get description() {
+			return t("Replaces the existing file content with the template.");
+		},
 		requiresExistingFile: true,
-		resolutionKind: "modifyExisting",
+		resolutionKind: "modifyExisting" as const,
 	},
 	{
-		id: "increment",
-		category: "create",
-		label: "Increment trailing number",
-		description:
-			"Changes trailing digits only. Example: Draft009.md -> Draft010.md.",
+		id: "increment" as const,
+		category: "create" as const,
+		get label() {
+			return t("Increment trailing number");
+		},
+		get description() {
+			return t("Changes trailing digits only. Example: Draft009.md -> Draft010.md.");
+		},
 		requiresExistingFile: false,
-		resolutionKind: "createNew",
+		resolutionKind: "createNew" as const,
 	},
 	{
-		id: "duplicateSuffix",
-		category: "create",
-		label: "Append duplicate suffix",
-		description:
-			"Keeps the original name and adds a duplicate marker. Example: Project Plan.md -> Project Plan (1).md.",
+		id: "duplicateSuffix" as const,
+		category: "create" as const,
+		get label() {
+			return t("Append duplicate suffix");
+		},
+		get description() {
+			return t("Keeps the original name and adds a duplicate marker. Example: Project Plan.md -> Project Plan (1).md.");
+		},
 		requiresExistingFile: false,
-		resolutionKind: "createNew",
+		resolutionKind: "createNew" as const,
 	},
 	{
-		id: "doNothing",
-		category: "keep",
-		label: "Do nothing",
-		description: "Leaves the file unchanged and opens the existing file.",
+		id: "doNothing" as const,
+		category: "keep" as const,
+		get label() {
+			return t("Do nothing");
+		},
+		get description() {
+			return t("Leaves the file unchanged and opens the existing file.");
+		},
 		requiresExistingFile: true,
-		resolutionKind: "reuseExisting",
+		resolutionKind: "reuseExisting" as const,
 	},
-] as const;
+];
 
 export type FileExistsModeId = (typeof fileExistsModes)[number]["id"];
 export type FileExistsResolutionKind =

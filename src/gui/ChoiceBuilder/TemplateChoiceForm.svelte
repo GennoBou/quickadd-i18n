@@ -44,6 +44,7 @@ import { suggester } from "./components/suggesterAction";
 import { VALUE_SYNTAX } from "../../constants";
 import { usesDefaultTemplateTitlePrompt } from "../../utils/templateNoteDiscoveryEligibility";
 import { likelyTargetFolderPath } from "../../utils/previewTargetFolder";
+import { t } from "src/i18n";
 
 /**
  * Reactive replacement for TemplateChoiceBuilder.display(). Conditional rows are
@@ -75,12 +76,12 @@ function validateTemplatePath(
 	// can only be resolved when the choice runs, so don't flag it "not found";
 	// show a neutral hint instead (issue #620).
 	if (hasTemplatePathSyntax(value)) {
-		return { valid: true, message: "Contains format syntax — resolved at run time." };
+		return { valid: true, message: t("Contains format syntax — resolved at run time.") };
 	}
 	// Resolve like the engine does at run time rather than requiring
 	// suggestion-list membership: a template outside the configured folders
 	// still runs fine and must not be flagged "not found" (master #1170/#1325).
-	return getTemplateFile(app, value) !== null || "Template not found";
+	return getTemplateFile(app, value) !== null || t("Template not found");
 }
 
 // --- File name format ----------------------------------------------------
@@ -98,8 +99,8 @@ const discoverySupported = $derived(
 );
 const discoveryDescription = $derived(
 	discoverySupported
-		? "For the default note-title prompt, show matching notes first. Choosing one opens it unchanged; choosing the create row continues with this template."
-		: "Only available when the file name prompt is the default note title: no custom format, {{VALUE}}, or {{NAME}}.",
+		? t("For the default note-title prompt, show matching notes first. Choosing one opens it unchanged; choosing the create row continues with this template.")
+		: t("Only available when the file name prompt is the default note title: no custom format, {{VALUE}}, or {{NAME}}."),
 );
 
 // --- Folder selector -----------------------------------------------------
@@ -192,14 +193,14 @@ function onModeChange(value: string) {
 
 <ChoiceNameHeader bind:name={choice.name} {app} />
 
-<SettingItem name="Template" heading />
+<SettingItem name={t("Template")} heading />
 
-<LabeledField name="Template path" desc="Path to the template this choice creates notes from.">
+<LabeledField name={t("Template path")} desc={t("Path to the template this choice creates notes from.")}>
 	{#snippet children(id)}
 		<ValidatedInput
 			{id}
 			value={choice.templatePath}
-			placeholder="Template path"
+			placeholder={t("Template path")}
 			{app}
 			suggestions={templatePaths}
 			maxSuggestions={50}
@@ -210,8 +211,8 @@ function onModeChange(value: string) {
 </LabeledField>
 
 <LabeledField
-	name="File name format"
-	desc="Set the file name format. When off, QuickAdd asks for the note title."
+	name={t("File name format")}
+	desc={t("Set the file name format. When off, QuickAdd asks for the note title.")}
 	bodyVisible={choice.fileNameFormat.enabled}
 >
 	{#snippet control()}
@@ -221,7 +222,7 @@ function onModeChange(value: string) {
 		<ValidatedInput
 			{id}
 			bind:value={choice.fileNameFormat.format}
-			placeholder="File name format"
+			placeholder={t("File name format")}
 			makeSuggesters={fileNameSuggesters}
 		/>
 		<FormatTokenHint value={choice.fileNameFormat.format} />
@@ -235,14 +236,14 @@ function onModeChange(value: string) {
 	{/snippet}
 </LabeledField>
 
-<SettingItem name="Location" heading />
+<SettingItem name={t("Location")} heading />
 
-<SettingItem name="New note location" desc={folderModeDesc}>
+<SettingItem name={t("New note location")} desc={folderModeDesc}>
 	{#snippet control()}
 		<Dropdown
 			value={folderMode}
 			options={folderModeOptions}
-			ariaLabel="New note location"
+			ariaLabel={t("New note location")}
 			onchange={onFolderModeChange}
 		/>
 	{/snippet}
@@ -257,26 +258,25 @@ function onModeChange(value: string) {
 			<input
 				type="text"
 				class="qa-folder-path-input"
-				placeholder="Folder path"
-				aria-label="Folder path"
+				placeholder={t("Folder path")}
+				aria-label={t("Folder path")}
 				bind:value={folderInputValue}
 				onkeypress={onFolderInputKeypress}
 				use:suggester={attachFolderSuggester}
 			/>
-			<button type="button" class="mod-cta" onclick={addFolder}>Add</button>
+			<button type="button" class="mod-cta" onclick={addFolder}>{t("Add")}</button>
 		</div>
 	</div>
 
 	{#if needsFolderList}
 		<div class="qa-folder-mode-warning">
-			Add at least one folder. With none, the note falls back to the active
-			file's folder (or you'll be prompted to pick one if no file is open).
+			{t("Add at least one folder. With none, the note falls back to the active file's folder (or you'll be prompted to pick one if no file is open).")}
 		</div>
 	{/if}
 
 	<SettingItem
-		name="Include subfolders"
-		desc="Get prompted to choose from both the selected folders and their subfolders when creating the note."
+		name={t("Include subfolders")}
+		desc={t("Get prompted to choose from both the selected folders and their subfolders when creating the note.")}
 	>
 		{#snippet control()}
 			<Toggle bind:checked={choice.folder.chooseFromSubfolders} />
@@ -284,11 +284,11 @@ function onModeChange(value: string) {
 	</SettingItem>
 {/if}
 
-<SettingItem name="Linking" heading />
-<AppendLinkSetting bind:appendLink={choice.appendLink} fileLabel="created" {app} />
+<SettingItem name={t("Linking")} heading />
+<AppendLinkSetting bind:appendLink={choice.appendLink} fileLabel={t("created")} {app} />
 <SettingItem
-	name="Copy link to clipboard"
-	desc="Copy a link to the created file after the Template choice runs."
+	name={t("Copy link to clipboard")}
+	desc={t("Copy a link to the created file after the Template choice runs.")}
 >
 	{#snippet control()}
 		<Toggle
@@ -298,10 +298,10 @@ function onModeChange(value: string) {
 	{/snippet}
 </SettingItem>
 
-<SettingItem name="Behavior" heading />
+<SettingItem name={t("Behavior")} heading />
 
 <SettingItem
-	name="Search existing notes before creating"
+	name={t("Search existing notes before creating")}
 	desc={discoveryDescription}
 >
 	{#snippet control()}
@@ -319,8 +319,8 @@ function onModeChange(value: string) {
 </SettingItem>
 
 <SettingItem
-	name="If the target file already exists"
-	desc="Choose whether QuickAdd should ask what to do, update the existing file, create another file, or keep the existing file."
+	name={t("If the target file already exists")}
+	desc={t("Choose whether QuickAdd should ask what to do, update the existing file, create another file, or keep the existing file.")}
 >
 	{#snippet control()}
 		<Dropdown
@@ -336,7 +336,7 @@ function onModeChange(value: string) {
 
 {#if showModeRow}
 	<SettingItem
-		name={behaviorCategory === "update" ? "Update action" : "New file naming"}
+		name={behaviorCategory === "update" ? t("Update action") : t("New file naming")}
 		desc={getFileExistsMode(selectedMode).description}
 	>
 		{#snippet control()}
@@ -352,9 +352,9 @@ function onModeChange(value: string) {
 	</SettingItem>
 {/if}
 
-<OpenFileSetting bind:openFile={choice.openFile} description="Open the created file." />
+<OpenFileSetting bind:openFile={choice.openFile} description={t("Open the created file.")} />
 {#if choice.openFile}
-	<FileOpeningSetting bind:fileOpening={choice.fileOpening} contextLabel="created" />
+	<FileOpeningSetting bind:fileOpening={choice.fileOpening} contextLabel={t("created")} />
 {/if}
 
 <OnePageOverrideSetting bind:onePageInput={choice.onePageInput} />

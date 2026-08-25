@@ -6,6 +6,7 @@
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"lint": "eslint .",
+		"check-i18n": "node scripts/check-i18n.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"build-with-lint": "tsc -noEmit -skipLibCheck && pnpm lint && node esbuild.config.mjs production",
 		"check": "svelte-check --threshold error",

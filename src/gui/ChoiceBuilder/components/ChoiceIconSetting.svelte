@@ -7,6 +7,7 @@ import ObsidianIcon from "../../components/ObsidianIcon.svelte";
 import SettingItem from "../../components/SettingItem.svelte";
 import { GenericTextSuggester } from "../../suggesters/genericTextSuggester";
 import { suggester } from "./suggesterAction";
+import { t } from "src/i18n";
 
 let {
 	icon = $bindable(),
@@ -35,8 +36,8 @@ function onInput(event: Event) {
 </script>
 
 <SettingItem
-	name="Icon"
-	desc={`Lucide/Obsidian icon id. Leave empty to use ${defaultIcon}.`}
+	name={t("Icon")}
+	desc={t("Lucide/Obsidian icon id. Leave empty to use {defaultIcon}.", { defaultIcon })}
 >
 	{#snippet control()}
 		<div class="qa-choice-icon-setting-control">
@@ -48,7 +49,7 @@ function onInput(event: Event) {
 				class="qa-choice-icon-input"
 				value={inputValue}
 				placeholder={defaultIcon}
-				aria-label="Choice icon"
+				aria-label={t("Choice icon")}
 				oninput={onInput}
 				use:suggester={attachIconSuggester}
 			/>

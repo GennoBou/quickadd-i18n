@@ -3,6 +3,7 @@ import type { App } from "obsidian";
 import { GenericTextSuggester } from "../../suggesters/genericTextSuggester";
 import type { TextInputSuggest } from "../../suggesters/suggest";
 import { suggester } from "./suggesterAction";
+import { t } from "src/i18n";
 
 type AnySuggest = Pick<TextInputSuggest<unknown>, "destroy">;
 type HintVariant = "neutral" | "success";
@@ -29,7 +30,7 @@ let {
 	placeholder = undefined,
 	inputKind = "text",
 	required = false,
-	requiredMessage = "This field is required",
+	requiredMessage = t("This field is required"),
 	disabled = false,
 	validator = undefined,
 	trim = true,
@@ -95,7 +96,7 @@ async function runValidator(candidate: string): Promise<boolean> {
 	if (myToken !== validateToken || disposed) return true;
 
 	if (typeof res === "boolean") {
-		setHint(res ? undefined : "Invalid value", !res);
+		setHint(res ? undefined : t("Invalid value"), !res);
 		return res;
 	}
 	if (typeof res === "string") {
@@ -103,7 +104,7 @@ async function runValidator(candidate: string): Promise<boolean> {
 		return false;
 	}
 	setHint(
-		res.message ?? (res.valid ? undefined : "Invalid value"),
+		res.message ?? (res.valid ? undefined : t("Invalid value")),
 		!res.valid,
 		res.valid ? (res.variant ?? "neutral") : "neutral",
 	);

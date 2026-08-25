@@ -10,6 +10,7 @@ import { estimateTokenCount } from "src/ai/tokenEstimator";
 import { addSamplingParamSettings } from "./samplingParamSettings";
 import { populateModelDropdown } from "../modelSelect";
 import { activeModelRef } from "src/ai/Provider";
+import { t } from "src/i18n";
 
 export class AIAssistantCommandSettingsModal extends Modal {
 	public waitForClose: Promise<IAIAssistantCommand | null>;
@@ -80,8 +81,8 @@ export class AIAssistantCommandSettingsModal extends Modal {
 		// the heading, so the <h2> keeps its heading role for screen readers (#1250).
 		const renameButton = header.createEl("button", {
 			cls: "qa-rename-title-button",
-			text: `${this.settings.name} settings`,
-			attr: { type: "button", "aria-label": `Rename ${this.settings.name}` },
+			text: t("{name} settings", { name: this.settings.name }),
+			attr: { type: "button", "aria-label": t("Rename {name}", { name: this.settings.name }) },
 		});
 
 		renameButton.addEventListener("click", () => {
@@ -89,7 +90,7 @@ export class AIAssistantCommandSettingsModal extends Modal {
 				try {
 					const newName = await GenericInputPrompt.Prompt(
 						this.app,
-						"New name",
+						t("New name"),
 						this.settings.name,
 						this.settings.name
 					);
@@ -134,7 +135,7 @@ export class AIAssistantCommandSettingsModal extends Modal {
 		});
 
 		new ButtonComponent(buttonRow)
-			.setButtonText("Cancel")
+			.setButtonText(t("Cancel"))
 			.onClick(() => {
 				// Dismissing via Cancel discards every edit made in this session.
 				this.restoreOriginal();
@@ -143,7 +144,7 @@ export class AIAssistantCommandSettingsModal extends Modal {
 			});
 
 		new ButtonComponent(buttonRow)
-			.setButtonText("Save")
+			.setButtonText(t("Save"))
 			.setCta()
 			.onClick(() => {
 				this.resolve(this.settings);
@@ -166,9 +167,9 @@ export class AIAssistantCommandSettingsModal extends Modal {
 		).map((f) => f.name);
 
 		new Setting(container)
-			.setName("Prompt template")
+			.setName(t("Prompt template"))
 			.setDesc(
-				"Enabling this will have the assistant use the prompt template you specify. If disable, the assistant will ask you for a prompt template to use."
+				t("Enabling this will have the assistant use the prompt template you specify. If disable, the assistant will ask you for a prompt template to use.")
 			)
 			.addToggle((toggle) => {
 				toggle.setValue(this.settings.promptTemplate.enable);
@@ -193,8 +194,8 @@ export class AIAssistantCommandSettingsModal extends Modal {
 
 	addModelSetting(container: HTMLElement) {
 		new Setting(container)
-			.setName("Model")
-			.setDesc("The model the AI Assistant will use")
+			.setName(t("Model"))
+			.setDesc(t("The model the AI Assistant will use"))
 			.addDropdown((dropdown) => {
 				populateModelDropdown(dropdown, this.settings, (selection) => {
 					this.settings.model = selection.model;
@@ -207,9 +208,9 @@ export class AIAssistantCommandSettingsModal extends Modal {
 
 	addOutputVariableNameSetting(container: HTMLElement) {
 		new Setting(container)
-			.setName("Output variable name")
+			.setName(t("Output variable name"))
 			.setDesc(
-				"The name of the variable used to store the AI Assistant output, i.e. {{value:output}}."
+				t("The name of the variable used to store the AI Assistant output, i.e. {{value:output}}.")
 			)
 			.addText((text) => {
 				text.setValue(this.settings.outputVariableName).onChange(
@@ -222,15 +223,15 @@ export class AIAssistantCommandSettingsModal extends Modal {
 
 	addSystemPromptSetting(contentEl: HTMLElement) {
 		new Setting(contentEl)
-			.setName("System prompt")
-			.setDesc("The system prompt for the AI Assistant");
+			.setName(t("System prompt"))
+			.setDesc(t("The system prompt for the AI Assistant"));
 
 		const container = this.contentEl.createEl("div");
 		const tokenCount = container.createEl("span", {
 			cls: "qa-ai-token-count",
 		});
 		const tokenCountNote = container.createEl("div", {
-			text: "Estimated locally. Providers enforce exact context limits.",
+			text: t("Estimated locally. Providers enforce exact context limits."),
 			cls: "qa-ai-token-note",
 		});
 
@@ -241,7 +242,7 @@ export class AIAssistantCommandSettingsModal extends Modal {
 		textAreaComponent.inputEl.addClass("qa-ai-prompt-textarea");
 		// Appended to contentEl rather than the Setting's controlEl (it needs the
 		// full modal width), so nothing associates it with the name above.
-		textAreaComponent.inputEl.setAttribute("aria-label", "System prompt");
+		textAreaComponent.inputEl.setAttribute("aria-label", t("System prompt"));
 
 		// No format preview and no `{{` token autocomplete here: the system prompt
 		// is sent to the model verbatim (see mountSystemPromptLiteralNote). The
@@ -254,7 +255,7 @@ export class AIAssistantCommandSettingsModal extends Modal {
 		);
 
 		const updateTokenCount = debounce(() => {
-			tokenCount.innerText = `Estimated tokens: ${this.systemPromptTokenLength}`;
+			tokenCount.innerText = t("Estimated tokens: {count}", { count: this.systemPromptTokenLength });
 		}, 50);
 
 		textAreaComponent
@@ -270,9 +271,9 @@ export class AIAssistantCommandSettingsModal extends Modal {
 
 	addShowAdvancedSettingsToggle(container: HTMLElement) {
 		new Setting(container)
-			.setName("Show advanced settings")
+			.setName(t("Show advanced settings"))
 			.setDesc(
-				"Sampling settings such as temperature and top p. Untouched settings use the provider's defaults."
+				t("Sampling settings such as temperature and top p. Untouched settings use the provider's defaults.")
 			)
 			.addToggle((toggle) => {
 				toggle.setValue(this.showAdvancedSettings);

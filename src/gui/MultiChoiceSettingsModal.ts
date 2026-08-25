@@ -3,6 +3,7 @@ import { ButtonComponent, Modal, Setting } from "obsidian";
 import type IMultiChoice from "../types/choices/IMultiChoice";
 import { addChoiceIconSetting } from "./ChoiceBuilder/components/choiceIconSetting";
 import { promptCancelled } from "../errors/UserCancelError";
+import { t } from "../i18n";
 
 export class MultiChoiceSettingsModal extends Modal {
 	public waitForClose: Promise<IMultiChoice | undefined>;
@@ -34,10 +35,10 @@ export class MultiChoiceSettingsModal extends Modal {
 
 	private display() {
 		this.contentEl.empty();
-		this.titleEl.setText("Edit folder");
+		this.titleEl.setText(t("Edit folder"));
 
 		new Setting(this.contentEl)
-			.setName("Name")
+			.setName(t("Name"))
 			.addText((text) => {
 				text.setValue(this.name).onChange((value) => {
 					this.name = value;
@@ -45,12 +46,12 @@ export class MultiChoiceSettingsModal extends Modal {
 			});
 
 		new Setting(this.contentEl)
-			.setName("Placeholder")
+			.setName(t("Placeholder"))
 			.setDesc(
-				"Shown in the choice picker search box when this folder opens. Leave blank to use the folder name.",
+				t("Shown in the choice picker search box when this folder opens. Leave blank to use the folder name."),
 			)
 			.addText((text) => {
-				text.setPlaceholder("Defaults to the folder name");
+				text.setPlaceholder(t("Defaults to the folder name"));
 				text.setValue(this.placeholder).onChange((value) => {
 					this.placeholder = value;
 				});
@@ -67,11 +68,11 @@ export class MultiChoiceSettingsModal extends Modal {
 
 		const buttonRow = this.contentEl.createDiv();
 		new ButtonComponent(buttonRow)
-			.setButtonText("Save")
+			.setButtonText(t("Save"))
 			.setCta()
 			.onClick(() => this.submit());
 		new ButtonComponent(buttonRow)
-			.setButtonText("Cancel")
+			.setButtonText(t("Cancel"))
 			.onClick(() => this.cancel());
 		buttonRow.addClass("qa-modal-button-row");
 	}

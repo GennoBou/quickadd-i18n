@@ -3,6 +3,7 @@
     import DragHandle from "../../components/DragHandle.svelte";
     import { onMount, untrack } from "svelte";
     import type {IWaitCommand} from "../../../types/macros/QuickCommands/IWaitCommand";
+    import { t } from "src/i18n";
 
     let {
         command,
@@ -48,16 +49,16 @@
 </script>
 
 <li class="quickAddCommandListItem">
-    <span class="quickAddCommandLabel">{command.name} for <input bind:this={inputEl} oninput={onTimeInput} type="number" min="0" placeholder="   " value={time} class="dotInput" aria-label="Wait duration in milliseconds">ms</span>
+    <span class="quickAddCommandLabel">{t("Wait")} {t("for")} <input bind:this={inputEl} oninput={onTimeInput} type="number" min="0" placeholder="   " value={time} class="dotInput" aria-label={t("Wait duration in milliseconds")}> {t("ms")}</span>
     <div class="quickAddCommandControls">
         <IconButton
             iconId="trash-2"
-            label={`Delete ${command.name}`}
+            label={t("Delete {name}", { name: command.name })}
             extraClass="clickable"
             onclick={() => onDeleteCommand(command.id)}
         />
         <DragHandle
-            label={`Reorder ${command.name}`}
+            label={t("Reorder {name}", { name: command.name })}
             {dragDisabled}
             onDragStart={startDrag}
             {onMoveUp}

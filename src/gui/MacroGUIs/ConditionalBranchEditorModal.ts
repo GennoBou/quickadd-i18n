@@ -9,6 +9,7 @@ import {
 	CommandSequenceEditor,
 	type CommandSequenceEditorConditionalHandlers,
 } from "./CommandSequenceEditor";
+import { t } from "../../i18n";
 
 interface ConditionalBranchEditorModalOptions {
 	app: App;
@@ -98,7 +99,7 @@ export class ConditionalBranchEditorModal extends Modal {
 		if (!editable) {
 			new ButtonComponent(buttonContainer)
 				.setCta()
-				.setButtonText("Close")
+				.setButtonText(t("Close"))
 				.onClick(() => {
 					this.resolve(null);
 					this.close();
@@ -107,7 +108,7 @@ export class ConditionalBranchEditorModal extends Modal {
 		}
 
 		new ButtonComponent(buttonContainer)
-			.setButtonText("Cancel")
+			.setButtonText(t("Cancel"))
 			.onClick(() => {
 				this.resolve(null);
 				this.close();
@@ -115,7 +116,7 @@ export class ConditionalBranchEditorModal extends Modal {
 
 		new ButtonComponent(buttonContainer)
 			.setCta()
-			.setButtonText("Save")
+			.setButtonText(t("Save"))
 			.onClick(() => {
 				this.resolve(commandListOf(this.workingCommands));
 				this.close();

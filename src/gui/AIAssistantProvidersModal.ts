@@ -12,6 +12,7 @@ import GenericInputPrompt from "./GenericInputPrompt/GenericInputPrompt";
 import { ProviderPickerModal } from "./ProviderPickerModal";
 import GenericYesNoPrompt from "./GenericYesNoPrompt/GenericYesNoPrompt";
 import type { IconType } from "src/types/IconType";
+import { t } from "src/i18n";
 
 export class AIAssistantProvidersModal extends Modal {
 	public waitForClose: Promise<AIProvider[]>;
@@ -68,7 +69,7 @@ export class AIAssistantProvidersModal extends Modal {
 	private display(): void {
 		const modalName = this.selectedProvider
 			? `${this.selectedProvider.name}`
-			: "Providers";
+			: t("Providers");
 
 		this.contentEl.createEl("h2", {
 			text: modalName,
@@ -92,10 +93,10 @@ export class AIAssistantProvidersModal extends Modal {
 
 	addProvidersSetting(container: HTMLElement) {
 		new Setting(container)
-			.setName("Providers")
-			.setDesc("Providers for the AI Assistant")
+			.setName(t("Providers"))
+			.setDesc(t("Providers for the AI Assistant"))
             .addButton((button) => {
-                button.setButtonText("Add provider").onClick(async () => {
+                button.setButtonText(t("Add provider")).onClick(async () => {
                     await new ProviderPickerModal(this.app, this.providers).waitForClose;
                     this.reload();
                 });
@@ -115,7 +116,7 @@ export class AIAssistantProvidersModal extends Modal {
 					button.onClick(async () => {
 						const confirmation = await GenericYesNoPrompt.Prompt(
 							this.app,
-							`Are you sure you want to delete ${provider.name}?`
+							t("Are you sure you want to delete {name}?", { name: provider.name }),
 						);
 						if (!confirmation) {
 							return;
@@ -128,7 +129,7 @@ export class AIAssistantProvidersModal extends Modal {
 					button.setIcon("trash" as IconType);
 				})
 					.addButton((button) => {
-						button.setButtonText("Edit").onClick(() => {
+						button.setButtonText(t("Edit")).onClick(() => {
 							this.selectedProvider = provider;
 							this._selectedProviderClone = deepClone(provider);
 
@@ -155,11 +156,11 @@ export class AIAssistantProvidersModal extends Modal {
 	addNameSetting(container: HTMLElement) {
 		const providerId = this.selectedProvider!.id;
 		new Setting(container)
-			.setName("Name")
+			.setName(t("Name"))
 			.setDesc(
 				providerId
-					? `The display name of the provider. Its stable ID is "${providerId}" — use that to qualify models in scripts, e.g. ai.prompt with "${providerId}/model-name".`
-					: "The display name of the provider",
+					? t('The display name of the provider. Its stable ID is "{id}" — use that to qualify models in scripts, e.g. ai.prompt with "{id}/model-name".', { id: providerId })
+					: t("The display name of the provider"),
 			)
 			.addText((text) => {
 				text.setValue(this.selectedProvider!.name).onChange((value) => {
@@ -170,8 +171,8 @@ export class AIAssistantProvidersModal extends Modal {
 
 	addEndpointSetting(container: HTMLElement) {
 		new Setting(container)
-			.setName("Endpoint")
-			.setDesc("The endpoint for the AI Assistant")
+			.setName(t("Endpoint"))
+			.setDesc(t("The endpoint for the AI Assistant"))
 			.addText((text) => {
 				text.setValue(this.selectedProvider!.endpoint).onChange(
 					(value) => {
@@ -185,11 +186,11 @@ export class AIAssistantProvidersModal extends Modal {
 		const hasLegacyKey =
 			!!this.selectedProvider?.apiKey && !this.selectedProvider?.apiKeyRef;
 		const description = hasLegacyKey
-			? "Legacy API key detected. Select a SecretStorage entry to migrate."
-			: "Select a secret from SecretStorage";
+			? t("Legacy API key detected. Select a SecretStorage entry to migrate.")
+			: t("Select a secret from SecretStorage");
 
 		new Setting(container)
-			.setName("API key")
+			.setName(t("API key"))
 			.setDesc(description)
 			.addComponent((el) =>
 				new SecretComponent(this.app, el)
@@ -204,15 +205,15 @@ export class AIAssistantProvidersModal extends Modal {
 
 	addKindSetting(container: HTMLElement) {
 		new Setting(container)
-			.setName("Provider type")
+			.setName(t("Provider type"))
 			.setDesc(
-				"The request format this provider expects. Auto-detect recognizes the official Anthropic and Gemini endpoints and treats everything else as OpenAI-compatible; pick a type explicitly for a proxy or custom endpoint.",
+				t("The request format this provider expects. Auto-detect recognizes the official Anthropic and Gemini endpoints and treats everything else as OpenAI-compatible; pick a type explicitly for a proxy or custom endpoint."),
 			)
 			.addDropdown((dropdown) => {
-				dropdown.addOption("", "Auto-detect");
-				dropdown.addOption("openai", "OpenAI-compatible");
-				dropdown.addOption("anthropic", "Anthropic");
-				dropdown.addOption("gemini", "Gemini");
+				dropdown.addOption("", t("Auto-detect"));
+				dropdown.addOption("openai", t("OpenAI-compatible"));
+				dropdown.addOption("anthropic", t("Anthropic"));
+				dropdown.addOption("gemini", t("Gemini"));
 				dropdown.setValue(this.selectedProvider?.kind ?? "");
 				dropdown.onChange((value) => {
 					if (!this.selectedProvider) return;
@@ -226,19 +227,19 @@ export class AIAssistantProvidersModal extends Modal {
 	addModelSourceSetting(container: HTMLElement) {
 		const provider = this.selectedProvider;
 		new Setting(container)
-			.setName("Model source")
+			.setName(t("Model source"))
 			.setDesc(
-				"Choose where QuickAdd looks when browsing or syncing models for this provider.",
+				t("Choose where QuickAdd looks when browsing or syncing models for this provider."),
 			)
 			.addDropdown((dropdown) => {
 				dropdown.addOption(
 					"providerApi",
-					"Provider models endpoint (requires API key)",
+					t("Provider models endpoint (requires API key)"),
 				);
-				dropdown.addOption("modelsDev", "models.dev directory");
+				dropdown.addOption("modelsDev", t("models.dev directory"));
 				dropdown.addOption(
 					"auto",
-					"Automatic (try provider, fallback to models.dev)",
+					t("Automatic (try provider, fallback to models.dev)"),
 				);
 				const current = provider?.modelSource ?? "providerApi";
 				dropdown.setValue(current);
@@ -256,12 +257,12 @@ export class AIAssistantProvidersModal extends Modal {
 		});
 
         this.selectedProvider!.models.forEach((model, i) => {
-            const metadata = [`Context: ${model.maxTokens.toLocaleString()} tokens`];
+            const metadata = [t("Context: {count} tokens", { count: model.maxTokens.toLocaleString() })];
             if (model.maxOutputTokens) {
-                metadata.push(`Output: ${model.maxOutputTokens.toLocaleString()} tokens`);
+                metadata.push(t("Output: {count} tokens", { count: model.maxOutputTokens.toLocaleString() }));
             }
             if (model.supportsTemperature === false) {
-                metadata.push("Fixed sampling (no temperature)");
+                metadata.push(t("Fixed sampling (no temperature)"));
             }
             new Setting(modelsContainer)
                 .setName(model.name)
@@ -270,7 +271,7 @@ export class AIAssistantProvidersModal extends Modal {
                     button.onClick(async () => {
                         const confirmation = await GenericYesNoPrompt.Prompt(
                             this.app,
-                            `Are you sure you want to delete ${model.name}?`
+                            t("Are you sure you want to delete {name}?", { name: model.name }),
                         );
                         if (!confirmation) {
                             return;
@@ -285,19 +286,19 @@ export class AIAssistantProvidersModal extends Modal {
         });
 
         new Setting(modelsContainer)
-            .setName("Add model")
+            .setName(t("Add model"))
             .addButton((button) => {
-                button.setButtonText("Add model").onClick(async () => {
+                button.setButtonText(t("Add model")).onClick(async () => {
                     let modelName: string;
                     let maxTokens: string;
                     try {
                         modelName = await GenericInputPrompt.Prompt(
                             this.app,
-                            "Model name"
+                            t("Model name"),
                         );
                         maxTokens = await GenericInputPrompt.Prompt(
                             this.app,
-                            "Max tokens"
+                            t("Max tokens"),
                         );
                     } catch {
                         // Cancelling either prompt is a clean no-op.
@@ -306,7 +307,7 @@ export class AIAssistantProvidersModal extends Modal {
 
                     const trimmedName = modelName.trim();
                     if (!trimmedName) {
-                        new Notice("Model name cannot be empty.");
+                        new Notice(t("Model name cannot be empty."));
                         return;
                     }
 
@@ -314,7 +315,7 @@ export class AIAssistantProvidersModal extends Modal {
                     // accept "10abc" as 10. Require a plain positive integer.
                     const normalizedMaxTokens = maxTokens.trim();
                     if (!/^[1-9]\d*$/.test(normalizedMaxTokens)) {
-                        new Notice("Max tokens must be a positive number.");
+                        new Notice(t("Max tokens must be a positive number."));
                         return;
                     }
                     const parsedMaxTokens = Number(normalizedMaxTokens);
@@ -333,10 +334,10 @@ export class AIAssistantProvidersModal extends Modal {
 	addImportModelsFromDirectorySetting(container: HTMLElement) {
 		const sourceDescription = this.describeModelSource(this.selectedProvider);
 		new Setting(container)
-			.setName("Import models")
-			.setDesc(`Browse and import models from ${sourceDescription}.`)
+			.setName(t("Import models"))
+			.setDesc(t("Browse and import models from {source}.", { source: sourceDescription }))
 			.addButton((button) => {
-				button.setButtonText("Browse models").onClick(async () => {
+				button.setButtonText(t("Browse models")).onClick(async () => {
 					const res = await new ModelDirectoryModal(this.app, this.selectedProvider!).waitForClose;
                     if (!res) return;
                     const { imported, mode } = res;
@@ -350,7 +351,11 @@ export class AIAssistantProvidersModal extends Modal {
                             imported
                         );
                     }
-                    new Notice(`Imported ${imported.length} models${mode === "replace" ? " (replaced)" : " (added)"}.`);
+                    new Notice(
+						mode === "replace"
+							? t("Imported {count} models (replaced).", { count: imported.length })
+							: t("Imported {count} models (added).", { count: imported.length }),
+					);
                     this.reload();
                 });
                 button.setCta();
@@ -360,9 +365,9 @@ export class AIAssistantProvidersModal extends Modal {
 	addAutoSyncSetting(container: HTMLElement) {
 		const sourceDescription = this.describeModelSource(this.selectedProvider);
 		new Setting(container)
-			.setName("Auto-sync models")
+			.setName(t("Auto-sync models"))
 			.setDesc(
-				`Keep this provider's models current automatically: QuickAdd imports new models and refreshed context limits from ${sourceDescription} once a day and when these settings open.`,
+				t("Keep this provider's models current automatically: QuickAdd imports new models and refreshed context limits from {source} once a day and when these settings open.", { source: sourceDescription }),
 			)
 			.addToggle((toggle) => {
 				const current = !!this.selectedProvider?.autoSyncModels;
@@ -371,7 +376,7 @@ export class AIAssistantProvidersModal extends Modal {
 				});
 			})
 			.addButton((button) => {
-				button.setButtonText("Sync now").onClick(async () => {
+				button.setButtonText(t("Sync now")).onClick(async () => {
 					try {
 						const { added, updated } = await syncProviderModels(
 							this.app,
@@ -379,13 +384,13 @@ export class AIAssistantProvidersModal extends Modal {
 						);
 						new Notice(
 							added > 0 || updated > 0
-								? `Synced from ${sourceDescription}: ${added} new model(s), ${updated} updated.`
-								: `Synced from ${sourceDescription}: already up to date.`,
+								? t("Synced from {source}: {added} new model(s), {updated} updated.", { source: sourceDescription, added, updated })
+								: t("Synced from {source}: already up to date.", { source: sourceDescription }),
 						);
 						this.reload();
 					} catch (err) {
 						new Notice(
-							`Sync failed: ${(err as { message?: string }).message ?? err}`
+							t("Sync failed: {error}", { error: (err as { message?: string }).message ?? String(err) }),
 						);
 					}
 				});
@@ -416,7 +421,7 @@ export class AIAssistantProvidersModal extends Modal {
 		});
 
 		const CancelButton = new ButtonComponent(buttonRow);
-		CancelButton.setButtonText("Cancel");
+		CancelButton.setButtonText(t("Cancel"));
 		CancelButton.setDestructive();
 		CancelButton.onClick(() => {
 			// Cancel always returns to the provider list, discarding edits. We
@@ -428,7 +433,7 @@ export class AIAssistantProvidersModal extends Modal {
 		});
 
 		const SaveButton = new ButtonComponent(buttonRow);
-		SaveButton.setButtonText("Save");
+		SaveButton.setButtonText(t("Save"));
 		SaveButton.setCta();
 		SaveButton.onClick(() => {
 			this.selectedProvider = null;
@@ -440,11 +445,11 @@ export class AIAssistantProvidersModal extends Modal {
 		const mode = provider?.modelSource ?? "providerApi";
 		switch (mode) {
 			case "modelsDev":
-				return "the models.dev directory";
+				return t("the models.dev directory");
 			case "auto":
-				return "the provider's models endpoint (falls back to models.dev)";
+				return t("the provider's models endpoint (falls back to models.dev)");
 			default:
-				return "the provider's models endpoint";
+				return t("the provider's models endpoint");
 		}
 	}
 

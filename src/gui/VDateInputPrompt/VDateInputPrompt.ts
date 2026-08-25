@@ -9,6 +9,7 @@ import {
 	formatDateAliasInline,
 	getOrderedDateAliases,
 } from "../../utils/dateAliases";
+import { t } from "../../i18n";
 
 export default class VDateInputPrompt extends GenericInputPrompt {
 	protected supportsPeek(): boolean {
@@ -25,7 +26,9 @@ export default class VDateInputPrompt extends GenericInputPrompt {
 	private datePicker?: DatePickerController;
 	private selectedIso?: string;
 	private lastPickerDisplayValue?: string;
-	private static readonly PREVIEW_PLACEHOLDER = "Preview will appear here";
+	private static get PREVIEW_PLACEHOLDER() {
+		return t("Preview will appear here");
+	}
 
 	public static Prompt(
 		app: App,
@@ -143,7 +146,7 @@ export default class VDateInputPrompt extends GenericInputPrompt {
 		const previewContainer = container.createDiv("vdate-preview-container");
 		
 		previewContainer.createEl("div", {
-			text: "Preview:",
+			text: t("Preview:"),
 			cls: "vdate-preview-label"
 		});
 		
@@ -161,7 +164,7 @@ export default class VDateInputPrompt extends GenericInputPrompt {
 			});
 
 			const aliasSummary = aliasDetails.createEl("summary", {
-				text: `Aliases (${aliasEntries.length})`,
+				text: t("Aliases ({count})", { count: aliasEntries.length }),
 			});
 			aliasSummary.addClass("vdate-alias-summary");
 
@@ -196,7 +199,7 @@ export default class VDateInputPrompt extends GenericInputPrompt {
 			// showing the neutral "Preview will appear here" placeholder.
 			this.setPreviewText(
 				this.isOptionalPrompt
-					? "Will be left empty"
+					? t("Will be left empty")
 					: VDateInputPrompt.PREVIEW_PLACEHOLDER,
 				false,
 			);
@@ -281,7 +284,7 @@ export default class VDateInputPrompt extends GenericInputPrompt {
 			this.selectedIso = undefined;
 			this.lastPickerDisplayValue = undefined;
 			this.syncPickerSelection();
-			const errorMessage = parseResult.error || "Unable to parse date";
+			const errorMessage = parseResult.error || t("Unable to parse date");
 			this.setPreviewText(errorMessage, true);
 		}
 	}
@@ -326,7 +329,7 @@ export default class VDateInputPrompt extends GenericInputPrompt {
 			// but surface a notice so the user/caller is not left without any
 			// signal that the date could not be parsed.
 			new Notice(
-				`QuickAdd: "${trimmed}" could not be parsed as a date; using it as-is.`,
+				t('QuickAdd: "{value}" could not be parsed as a date; using it as-is.', { value: trimmed }),
 			);
 		}
 		return input;

@@ -21,6 +21,7 @@ import Dropdown from "../../components/Dropdown.svelte";
 import ValidatedInput from "./ValidatedInput.svelte";
 import LabeledField from "./LabeledField.svelte";
 import FormatPreviewField from "./FormatPreviewField.svelte";
+import { t } from "src/i18n";
 
 /** Reactive port of captureChoiceBuilder.addInsertAfterFields. */
 let {
@@ -62,11 +63,11 @@ const suggesters = [
 		new FormatSyntaxSuggester(app, el, plugin, "lineTarget"),
 ];
 
-const blankLineOptions = [
-	{ value: "auto", label: "Auto (headings only)" },
-	{ value: "skip", label: "Always skip" },
-	{ value: "none", label: "Never skip" },
-];
+const blankLineOptions = $derived([
+	{ value: "auto", label: t("Auto (headings only)") },
+	{ value: "skip", label: t("Always skip") },
+	{ value: "none", label: t("Never skip") },
+]);
 
 // Inline same-line insertion and ordered section placement are mutually
 // exclusive (ordered always creates a heading on its own line). Omit "Ordered"
@@ -74,36 +75,36 @@ const blankLineOptions = [
 const createLocationOptions = $derived(
 	insertAfter.inline
 		? [
-				{ value: CREATE_IF_NOT_FOUND_TOP, label: "Top" },
-				{ value: CREATE_IF_NOT_FOUND_BOTTOM, label: "Bottom" },
-				{ value: CREATE_IF_NOT_FOUND_CURSOR, label: "Cursor" },
+				{ value: CREATE_IF_NOT_FOUND_TOP, label: t("Top") },
+				{ value: CREATE_IF_NOT_FOUND_BOTTOM, label: t("Bottom") },
+				{ value: CREATE_IF_NOT_FOUND_CURSOR, label: t("Cursor") },
 			]
 		: [
-				{ value: CREATE_IF_NOT_FOUND_TOP, label: "Top" },
-				{ value: CREATE_IF_NOT_FOUND_BOTTOM, label: "Bottom" },
-				{ value: CREATE_IF_NOT_FOUND_CURSOR, label: "Cursor" },
+				{ value: CREATE_IF_NOT_FOUND_TOP, label: t("Top") },
+				{ value: CREATE_IF_NOT_FOUND_BOTTOM, label: t("Bottom") },
+				{ value: CREATE_IF_NOT_FOUND_CURSOR, label: t("Cursor") },
 				{
 					value: CREATE_IF_NOT_FOUND_ORDERED,
-					label: "Ordered (place new section among siblings)",
+					label: t("Ordered (place new section among siblings)"),
 				},
 			],
 );
 
-const orderByOptions = [
-	{ value: "insertion", label: "Insertion order (no sorting)" },
-	{ value: "lexical", label: "Text (A→Z)" },
-	{ value: "numeric", label: "Number" },
-	{ value: "date", label: "Date" },
-	{ value: "semver", label: "Version (semver)" },
-];
-const orderDirectionOptions = [
-	{ value: "desc", label: "Newest / highest first" },
-	{ value: "asc", label: "Oldest / lowest first" },
-];
-const unparseableOptions = [
-	{ value: "bottom", label: "Sort existing unparseable headings to bottom" },
-	{ value: "top", label: "Sort existing unparseable headings to top" },
-];
+const orderByOptions = $derived([
+	{ value: "insertion", label: t("Insertion order (no sorting)") },
+	{ value: "lexical", label: t("Text (A→Z)") },
+	{ value: "numeric", label: t("Number") },
+	{ value: "date", label: t("Date") },
+	{ value: "semver", label: t("Version (semver)") },
+]);
+const orderDirectionOptions = $derived([
+	{ value: "desc", label: t("Newest / highest first") },
+	{ value: "asc", label: t("Oldest / lowest first") },
+]);
+const unparseableOptions = $derived([
+	{ value: "bottom", label: t("Sort existing unparseable headings to bottom") },
+	{ value: "top", label: t("Sort existing unparseable headings to top") },
+]);
 
 // Tracks whether the ordering descriptor is "pinned" — either the user explicitly
 // chose a sort key / date format, or the choice arrived already carrying an
@@ -225,7 +226,7 @@ function onConsiderSubsectionsToggle(value: boolean) {
 		// Two-way bind syncs the toggle back to off when the target isn't a heading.
 		insertAfter.considerSubsections = false;
 		new Notice(
-			"Consider subsections requires the target to be a heading (starts with #)",
+			t("Consider subsections requires the target to be a heading (starts with #)"),
 		);
 	}
 }
@@ -241,8 +242,8 @@ function onPromptHeadingToggle(value: boolean) {
 </script>
 
 <SettingItem
-	name="Choose heading when capturing"
-	desc="Instead of typing a target line now, show a dropdown of the target note's headings when you run this capture and insert under the one you pick."
+	name={t("Choose heading when capturing")}
+	desc={t("Instead of typing a target line now, show a dropdown of the target note's headings when you run this capture and insert under the one you pick.")}
 >
 	{#snippet control()}
 		<Toggle
@@ -254,22 +255,20 @@ function onPromptHeadingToggle(value: boolean) {
 
 {#if insertAfter.promptHeading}
 	<div class="setting-item-description">
-		You'll pick a heading from the target note when you run this capture, and the
-		text is inserted under it. Use the toggles below to control placement within that
-		section.
+		{t("You'll pick a heading from the target note when you run this capture, and the text is inserted under it. Use the toggles below to control placement within that section.")}
 	</div>
 {:else}
 	<LabeledField
-		name="Insert after"
-		desc="Insert capture after specified text. Accepts format syntax. Tip: use a heading (starts with #) to target a section. Blank line handling is configurable below."
+		name={t("Insert after")}
+		desc={t("Insert capture after specified text. Accepts format syntax. Tip: use a heading (starts with #) to target a section. Blank line handling is configurable below.")}
 	>
 		{#snippet children(id)}
 			<ValidatedInput
 				{id}
 				bind:value={insertAfter.after}
-				placeholder="Insert after"
+				placeholder={t("Insert after")}
 				required
-				requiredMessage="Insert after text is required"
+				requiredMessage={t("Insert after text is required")}
 				makeSuggesters={suggesters}
 			/>
 			<FormatPreviewField value={insertAfter.after} formatterKind="lineTarget" {app} {plugin} />
@@ -277,10 +276,10 @@ function onPromptHeadingToggle(value: boolean) {
 	</LabeledField>
 
 	<SettingItem
-		name="Inline insertion"
+		name={t("Inline insertion")}
 		desc={orderedSelected
-			? "Inline insertion can't be combined with ordered placement."
-			: "Insert captured content on the same line, immediately after the matched text (no newline added)."}
+			? t("Inline insertion can't be combined with ordered placement.")
+			: t("Insert captured content on the same line, immediately after the matched text (no newline added).")}
 	>
 		{#snippet control()}
 			<Toggle bind:checked={insertAfter.inline} disabled={orderedSelected} />
@@ -289,16 +288,15 @@ function onPromptHeadingToggle(value: boolean) {
 
 	{#if inlineTargetHasLinebreak}
 		<div class="setting-item-description">
-			Inline insertion needs a single-line target. The line break (\n) can't be
-			matched on the same line — remove it, or turn off "Inline insertion".
+			{t("Inline insertion needs a single-line target. The line break (\\n) can't be matched on the same line — remove it, or turn off \"Inline insertion\".")}
 		</div>
 	{/if}
 {/if}
 
 {#if insertAfter.inline}
 	<SettingItem
-		name="Replace existing value"
-		desc="Replace everything after the matched text up to end-of-line."
+		name={t("Replace existing value")}
+		desc={t("Replace everything after the matched text up to end-of-line.")}
 	>
 		{#snippet control()}
 			<Toggle bind:checked={insertAfter.replaceExisting} />
@@ -306,8 +304,8 @@ function onPromptHeadingToggle(value: boolean) {
 	</SettingItem>
 {:else}
 	<SettingItem
-		name="Insert at end of section"
-		desc="Place the text at the end of the matched section instead of the top."
+		name={t("Insert at end of section")}
+		desc={t("Place the text at the end of the matched section instead of the top.")}
 	>
 		{#snippet control()}
 			<Toggle bind:checked={insertAfter.insertAtEnd} />
@@ -315,10 +313,10 @@ function onPromptHeadingToggle(value: boolean) {
 	</SettingItem>
 
 	<SettingItem
-		name="Blank lines after match"
+		name={t("Blank lines after match")}
 		desc={insertAfter.insertAtEnd
-			? "Not used when inserting at end of section."
-			: "Controls whether Insert After skips existing blank lines after the matched line."}
+			? t("Not used when inserting at end of section.")
+			: t("Controls whether Insert After skips existing blank lines after the matched line.")}
 	>
 		{#snippet control()}
 			<Dropdown
@@ -335,12 +333,12 @@ function onPromptHeadingToggle(value: boolean) {
 	</SettingItem>
 
 	<SettingItem
-		name="Consider subsections"
+		name={t("Consider subsections")}
 		desc={!insertAfter.insertAtEnd
-			? "Only affects placement when “Insert at end of section” is on."
+			? t("Only affects placement when “Insert at end of section” is on.")
 			: insertAfter.promptHeading
-				? "Also include the chosen heading’s subsections (nested headings inside its section)."
-				: "Also include the section’s subsections (requires target to be a heading starting with #). Subsections are headings inside the section."}
+				? t("Also include the chosen heading’s subsections (nested headings inside its section).")
+				: t("Also include the section’s subsections (requires target to be a heading starting with #). Subsections are headings inside the section.")}
 	>
 		{#snippet control()}
 			<Toggle
@@ -353,8 +351,8 @@ function onPromptHeadingToggle(value: boolean) {
 {/if}
 
 <SettingItem
-	name="Create line if not found"
-	desc="Creates the 'insert after' line if it is not found."
+	name={t("Create line if not found")}
+	desc={t("Creates the 'insert after' line if it is not found.")}
 >
 	{#snippet control()}
 		<Toggle bind:checked={insertAfter.createIfNotFound} />
@@ -368,14 +366,10 @@ function onPromptHeadingToggle(value: boolean) {
 
 {#if isOrdered && insertAfter.orderBy}
 	<div class="setting-item-description">
-		The "Insert after" heading is created at its sorted position among ALL
-		same-level headings in the note (it is not scoped to one parent section). It
-		does NOT re-sort headings you already have; only the new one is placed. Use
-		"Insert at end of section" above for newest-on-top vs. appended entries within
-		each section.
+		{t("The \"Insert after\" heading is created at its sorted position among ALL same-level headings in the note (it is not scoped to one parent section). It does NOT re-sort headings you already have; only the new one is placed. Use \"Insert at end of section\" above for newest-on-top vs. appended entries within each section.")}
 	</div>
 
-	<SettingItem name="Sort sections by">
+	<SettingItem name={t("Sort sections by")}>
 		{#snippet control()}
 			<Dropdown
 				value={ordering.by}
@@ -385,7 +379,7 @@ function onPromptHeadingToggle(value: boolean) {
 		{/snippet}
 	</SettingItem>
 
-	<SettingItem name="Section order">
+	<SettingItem name={t("Section order")}>
 		{#snippet control()}
 			<Dropdown
 				value={ordering.direction}
@@ -401,14 +395,14 @@ function onPromptHeadingToggle(value: boolean) {
 
 	{#if ordering.by === "date"}
 		<SettingItem
-			name="Date format"
-			desc="Moment format used to parse existing heading dates for sorting (e.g. YYYY-MM-DD)."
+			name={t("Date format")}
+			desc={t("Moment format used to parse existing heading dates for sorting (e.g. YYYY-MM-DD).")}
 		>
 			{#snippet control()}
 				<ValidatedInput
 					value={ordering.dateFormat ?? ""}
 					placeholder="YYYY-MM-DD"
-					ariaLabel="Date format"
+					ariaLabel={t("Date format")}
 					onChange={(value) => {
 						// A deliberate format edit pins the descriptor so the after-keyed
 						// seeder stops re-deriving dateFormat from the token.
@@ -422,8 +416,8 @@ function onPromptHeadingToggle(value: boolean) {
 
 	{#if ordering.by === "date" || ordering.by === "numeric" || ordering.by === "semver"}
 		<SettingItem
-			name="Existing unparseable headings"
-			desc="Where to rank EXISTING headings whose text can't be parsed for this sort. (A new heading that can't be parsed is appended at the end.)"
+			name={t("Existing unparseable headings")}
+			desc={t("Where to rank EXISTING headings whose text can't be parsed for this sort. (A new heading that can't be parsed is appended at the end.)")}
 		>
 			{#snippet control()}
 				<Dropdown
@@ -441,15 +435,13 @@ function onPromptHeadingToggle(value: boolean) {
 
 	{#if ordering.by === "insertion"}
 		<div class="setting-item-description">
-			No sorting: newest-first prepends the new section above existing ones;
-			oldest-first appends it below.
+			{t("No sorting: newest-first prepends the new section above existing ones; oldest-first appends it below.")}
 		</div>
 	{/if}
 
 	{#if showInsertionFallbackWarning}
 		<div class="setting-item-description">
-			This heading uses a date token QuickAdd can't auto-read for sorting. Pick
-			"Date" and enter the format, or sections stay in insertion order.
+			{t("This heading uses a date token QuickAdd can't auto-read for sorting. Pick \"Date\" and enter the format, or sections stay in insertion order.")}
 		</div>
 	{/if}
 {/if}

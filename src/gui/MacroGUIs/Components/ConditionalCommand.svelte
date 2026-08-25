@@ -4,6 +4,7 @@
 	import type { IConditionalCommand } from "../../../types/macros/Conditional/IConditionalCommand";
 	import { getConditionSummary } from "../../../utils/conditionalHelpers";
 	import { commandListOf } from "../../../utils/macroUtils";
+	import { t } from "src/i18n";
 
 	let {
 		command,
@@ -40,37 +41,37 @@
 	<div class="quickAddCommandLabel">
 		<div class="conditionalSummary">{summary}</div>
 		<div class="conditionalBranches">
-			<span>Then: {thenCount}</span>
-			<span>Else: {elseCount}</span>
+			<span>{t("Then: {count}", { count: thenCount })}</span>
+			<span>{t("Else: {count}", { count: elseCount })}</span>
 		</div>
 	</div>
 	<div class="quickAddCommandControls">
 		<IconButton
 			iconId="settings"
-			label={`Edit condition for ${summary}`}
+			label={t("Edit condition for {summary}", { summary })}
 			extraClass="clickable"
 			onclick={() => onConfigureCondition(command)}
 		/>
 		<IconButton
 			iconId="corner-down-right"
-			label={`Edit then branch for ${summary}`}
+			label={t("Edit then branch for {summary}", { summary })}
 			extraClass="clickable"
 			onclick={() => onEditThenBranch(command)}
 		/>
 		<IconButton
 			iconId="corner-down-left"
-			label={`Edit else branch for ${summary}`}
+			label={t("Edit else branch for {summary}", { summary })}
 			extraClass="clickable"
 			onclick={() => onEditElseBranch(command)}
 		/>
 		<IconButton
 			iconId="trash-2"
-			label={`Delete ${command.name}`}
+			label={t("Delete {name}", { name: command.name })}
 			extraClass="clickable"
 			onclick={() => onDeleteCommand(command.id)}
 		/>
 		<DragHandle
-			label={`Reorder ${command.name}`}
+			label={t("Reorder {name}", { name: command.name })}
 			{dragDisabled}
 			onDragStart={startDrag}
 			{onMoveUp}

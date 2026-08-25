@@ -22,6 +22,7 @@
 		type MissingAsset,
 	} from "../../services/packageExportService";
 	import type { QuickAddPackageAssetKind } from "../../types/packages/QuickAddPackage";
+	import { t } from "src/i18n";
 
 	let {
 		app,
@@ -53,12 +54,15 @@
 		missingAssets: MissingAsset[];
 	};
 
-	const assetLabels: Record<QuickAddPackageAssetKind, string> = {
-		"user-script": "User script",
-		"conditional-script": "Conditional script",
-		template: "Template file",
-		"capture-template": "Capture template",
-	};
+	function getAssetLabel(kind: QuickAddPackageAssetKind): string {
+		const labels: Record<QuickAddPackageAssetKind, string> = {
+			"user-script": t("User script"),
+			"conditional-script": t("Conditional script"),
+			template: t("Template file"),
+			"capture-template": t("Capture template"),
+		};
+		return labels[kind] ?? kind;
+	}
 
 	let searchQuery = $state("");
 	let selectedChoiceIds = $state(new Set<string>());
@@ -212,7 +216,7 @@
 
 	async function preparePackage(): Promise<Awaited<ReturnType<typeof buildPackage>> | null> {
 		if (rootChoiceIds.length === 0) {
-			new Notice("Select at least one choice to export.");
+			new Notice(t("Select at least one choice to export."));
 			return null;
 		}
 
@@ -229,7 +233,7 @@
 		} catch (error) {
 			console.error(error);
 			exportWarnings = null;
-			new Notice(`Export failed: ${(error as Error)?.message ?? String(error)}`);
+			new Notice(t("Export failed: {error}", { error: (error as Error)?.message ?? String(error) }));
 			return null;
 		}
 	}
@@ -246,19 +250,19 @@
 			await copyToClipboard(serialized);
 
 			new Notice(
-				`Copied package (${buildResult.pkg.choices.length} choice${
-					buildResult.pkg.choices.length === 1 ? "" : "s"
-				}) to clipboard.`,
+				t("Copied package ({count} choices) to clipboard.", {
+					count: buildResult.pkg.choices.length,
+				}),
 			);
 
 			if (exportWarnings) {
-				new Notice("Package copied with warnings. Review details below.");
+				new Notice(t("Package copied with warnings. Review details below."));
 			} else {
 				close();
 			}
 		} catch (error) {
 			console.error(error);
-			new Notice(`Copy failed: ${(error as Error)?.message ?? String(error)}`);
+			new Notice(t("Copy failed: {error}", { error: (error as Error)?.message ?? String(error) }));
 		} finally {
 			actionInProgress = null;
 		}
@@ -269,7 +273,7 @@
 
 		const trimmedPath = outputPath.trim();
 		if (!trimmedPath) {
-			new Notice("Enter a file path before saving.");
+			new Notice(t("Enter a file path before saving."));
 			return;
 		}
 
@@ -284,15 +288,14 @@
 				trimmedPath,
 			);
 			const choiceCount = buildResult.pkg.choices.length;
-			const choiceLabel = `${choiceCount} choice${choiceCount === 1 ? "" : "s"}`;
 			new Notice(
 				overwritten
-					? `Overwrote package (${choiceLabel}) at '${trimmedPath}'.`
-					: `Saved package (${choiceLabel}) to '${trimmedPath}'.`,
+					? t("Overwrote package ({count} choices) at '{path}'.", { count: choiceCount, path: trimmedPath })
+					: t("Saved package ({count} choices) to '{path}'.", { count: choiceCount, path: trimmedPath }),
 			);
 
 			if (exportWarnings) {
-				new Notice("Package saved with warnings. Review details below.");
+				new Notice(t("Package saved with warnings. Review details below."));
 			} else {
 				close();
 			}
@@ -301,11 +304,11 @@
 			// Declining the overwrite confirmation is a deliberate no-op, not a
 			// failure: surface it neutrally instead of "Save failed: Save cancelled: …".
 			if (message.startsWith("Save cancelled:")) {
-				new Notice("Save cancelled.");
+				new Notice(t("Save cancelled."));
 				return;
 			}
 			console.error(error);
-			new Notice(`Save failed: ${message}`);
+			new Notice(t("Save failed: {error}", { error: message }));
 		} finally {
 			actionInProgress = null;
 		}
@@ -335,28 +338,28 @@
 
 <div class="exportPackageModal">
 	<header>
-		<h2>Export QuickAdd package</h2>
-		<p>Select choices to bundle. Dependencies are added automatically.</p>
+		<h2>{t("Export QuickAdd package")}</h2>
+		<p>{t("Select choices to bundle. Dependencies are added automatically.")}</p>
 	</header>
 
 	<section class="controls">
 		<input
 			type="text"
-			placeholder="Filter choices"
+			placeholder={t("Filter choices")}
 			bind:value={searchQuery}
 			autocapitalize="off"
 			autocorrect="off"
 			spellcheck={false}
 		/>
 		<div class="controlButtons">
-			<button type="button" onclick={selectAllFiltered}>Select visible</button>
-			<button type="button" onclick={clearSelection}>Clear selection</button>
+			<button type="button" onclick={selectAllFiltered}>{t("Select visible")}</button>
+			<button type="button" onclick={clearSelection}>{t("Clear selection")}</button>
 		</div>
 	</section>
 
 	<section class="choiceList">
 		{#if filteredChoices.length === 0}
-			<p class="emptyState">No choices match the current filter.</p>
+			<p class="emptyState">{t("No choices match the current filter.")}</p>
 		{:else}
 			<ul>
 				{#each filteredChoices as entry (entry.id)}
@@ -382,35 +385,34 @@
 	</section>
 
 	<section class="summary">
-		<h3>Package summary</h3>
+		<h3>{t("Package summary")}</h3>
 		<div class="summaryGrid">
 			<div>
 				<strong>{summary.rootCount}</strong>
-				<span>Selected choices</span>
+				<span>{t("Selected choices")}</span>
 			</div>
 			<div>
 				<strong>{summary.totalChoices}</strong>
-				<span>Total packaged</span>
+				<span>{t("Total packaged")}</span>
 			</div>
 			<div>
 				<strong>{summary.dependencyCount}</strong>
-				<span>Auto-included</span>
+				<span>{t("Auto-included")}</span>
 			</div>
 			<div>
 				<strong>{summary.userScripts + summary.conditionalScripts}</strong>
-				<span>Scripts embedded</span>
+				<span>{t("Scripts embedded")}</span>
 			</div>
 			<div>
 				<strong>{summary.templateFiles + summary.captureTemplates}</strong>
-				<span>Templates embedded</span>
+				<span>{t("Templates embedded")}</span>
 			</div>
 		</div>
 		{#if summary.missingChoiceIds.length > 0}
 			<div class="warning">
-				<strong>Missing dependencies detected</strong>
+				<strong>{t("Missing dependencies detected")}</strong>
 				<p>
-					The following choice IDs were referenced but not found:
-					{summary.missingChoiceIds.join(", ")}
+					{t("The following choice IDs were referenced but not found: {ids}", { ids: summary.missingChoiceIds.join(", ") })}
 				</p>
 			</div>
 		{/if}
@@ -418,21 +420,22 @@
 
 	{#if exportWarnings}
 		<section class="warning">
-			<h4>Warnings</h4>
+			<h4>{t("Warnings")}</h4>
 			{#if exportWarnings.missingChoices.length > 0}
 				<p>
-					Missing choices:
-					{exportWarnings.missingChoices
-						.map((id) => choiceNameById.get(id) ?? id)
-						.join(", ")}
+					{t("Missing choices: {choices}", {
+						choices: exportWarnings.missingChoices
+							.map((id) => choiceNameById.get(id) ?? id)
+							.join(", "),
+					})}
 				</p>
 			{/if}
 			{#if exportWarnings.missingAssets.length > 0}
 				<div>
-					<p>Missing assets:</p>
+					<p>{t("Missing assets:")}</p>
 					<ul>
 						{#each exportWarnings.missingAssets as asset (asset.path)}
-							<li>{asset.path} <span class="assetKind">({assetLabels[asset.kind]})</span></li>
+							<li>{asset.path} <span class="assetKind">({getAssetLabel(asset.kind)})</span></li>
 						{/each}
 					</ul>
 				</div>
@@ -449,15 +452,15 @@
 				disabled={actionInProgress !== null}
 			>
 				{#if actionInProgress === "copy"}
-					Copying…
+					{t("Copying…")}
 				{:else}
-					Copy JSON
+					{t("Copy JSON")}
 				{/if}
 			</button>
 		</div>
 		<div class="actionGroup">
 			<label>
-				<span>Save to file</span>
+				<span>{t("Save to file")}</span>
 				<div class="saveRow">
 					<input
 						type="text"
@@ -470,9 +473,9 @@
 						disabled={actionInProgress !== null}
 					>
 						{#if actionInProgress === "save"}
-							Saving…
+							{t("Saving…")}
 						{:else}
-							Save to file
+							{t("Save to file")}
 						{/if}
 					</button>
 				</div>
@@ -482,7 +485,7 @@
 
 	<section class="footer">
 		<button type="button" class="secondary" onclick={close} disabled={actionInProgress !== null}>
-			Cancel
+			{t("Cancel")}
 		</button>
 	</section>
 </div>

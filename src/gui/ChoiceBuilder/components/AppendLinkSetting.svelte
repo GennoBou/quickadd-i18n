@@ -18,6 +18,7 @@ import {
 	placementSupportsSelectionAlias,
 } from "../../../types/linkPlacement";
 import { normalizeAppendLinkDestinationPath } from "../../../utils/fileLinks";
+import { t } from "src/i18n";
 
 /**
  * Shared append-link configuration — collapses the near-identical
@@ -31,7 +32,7 @@ let {
 	app = undefined,
 }: {
 	appendLink: boolean | AppendLinkOptions;
-	fileLabel: "captured" | "created";
+	fileLabel: "captured" | "created" | string;
 	app?: App | undefined;
 } = $props();
 
@@ -61,35 +62,35 @@ const markdownFilePaths = $derived(
 	app ? app.vault.getMarkdownFiles().map((file) => file.path) : [],
 );
 
-const modeOptions = [
-	{ value: "required", label: "Enabled (strict)" },
-	{ value: "optional", label: "Enabled (skip if unavailable)" },
-	{ value: "disabled", label: "Disabled" },
-];
-const destinationOptions = [
-	{ value: "activeFile", label: "Current note" },
-	{ value: "specifiedFile", label: "Specified note" },
-];
-const placementOptions = [
-	{ value: "replaceSelection", label: "Replace selection" },
-	{ value: "afterSelection", label: "After selection" },
-	{ value: "endOfLine", label: "End of line" },
-	{ value: "newLine", label: "New line" },
-	{ value: "inFrontmatter", label: "In frontmatter property" },
-];
-const linkTypeOptions = [
-	{ value: "link", label: "Link" },
-	{ value: "embed", label: "Embed" },
-];
-const displayTextOptions = [
-	{ value: "none", label: "Default" },
-	{ value: "selection", label: "Selected text" },
-];
-const frontmatterHandlingOptions = [
-	{ value: "alwaysAppend", label: "Create or convert" },
-	{ value: "createProperty", label: "Create if missing" },
-	{ value: "error", label: "Require list" },
-];
+const modeOptions = $derived([
+	{ value: "required", label: t("Enabled (strict)") },
+	{ value: "optional", label: t("Enabled (skip if unavailable)") },
+	{ value: "disabled", label: t("Disabled") },
+]);
+const destinationOptions = $derived([
+	{ value: "activeFile", label: t("Current note") },
+	{ value: "specifiedFile", label: t("Specified note") },
+]);
+const placementOptions = $derived([
+	{ value: "replaceSelection", label: t("Replace selection") },
+	{ value: "afterSelection", label: t("After selection") },
+	{ value: "endOfLine", label: t("End of line") },
+	{ value: "newLine", label: t("New line") },
+	{ value: "inFrontmatter", label: t("In frontmatter property") },
+]);
+const linkTypeOptions = $derived([
+	{ value: "link", label: t("Link") },
+	{ value: "embed", label: t("Embed") },
+]);
+const displayTextOptions = $derived([
+	{ value: "none", label: t("Default") },
+	{ value: "selection", label: t("Selected text") },
+]);
+const frontmatterHandlingOptions = $derived([
+	{ value: "alwaysAppend", label: t("Create or convert") },
+	{ value: "createProperty", label: t("Create if missing") },
+	{ value: "error", label: t("Require list") },
+]);
 
 function nextOptions(overrides: Partial<AppendLinkOptions>): AppendLinkOptions {
 	const current = appendLink;
@@ -192,7 +193,7 @@ function onDestinationPathChange(value: string) {
 
 function validateDestinationFile(raw: string) {
 	const value = raw.trim();
-	if (!value) return "Destination file is required";
+	if (!value) return t("Destination file is required");
 	if (!app) return true;
 
 	const target = app.vault.getAbstractFileByPath(
@@ -200,13 +201,13 @@ function validateDestinationFile(raw: string) {
 	);
 	return target instanceof TFile && target.extension === "md"
 		? true
-		: "Markdown file not found";
+		: t("Markdown file not found");
 }
 </script>
 
 <SettingItem
-	name={`Link to ${fileLabel} file`}
-	desc={`Choose whether QuickAdd should insert a link to the ${fileLabel} file.`}
+	name={t("Link to {label} file", { label: fileLabel })}
+	desc={t("Choose whether QuickAdd should insert a link to the {label} file.", { label: fileLabel })}
 >
 	{#snippet control()}
 		<Dropdown value={currentMode} options={modeOptions} onchange={onModeChange} />
@@ -215,8 +216,8 @@ function validateDestinationFile(raw: string) {
 
 {#if currentMode !== "disabled"}
 	<SettingItem
-		name="Link destination"
-		desc={`Where QuickAdd writes the link to the ${fileLabel} file.`}
+		name={t("Link destination")}
+		desc={t("Where QuickAdd writes the link to the {label} file.", { label: fileLabel })}
 	>
 		{#snippet control()}
 			<Dropdown
@@ -229,8 +230,8 @@ function validateDestinationFile(raw: string) {
 
 	{#if destinationMode === "activeFile"}
 		<SettingItem
-			name="Link placement"
-			desc="Where to place the link when appending"
+			name={t("Link placement")}
+			desc={t("Where to place the link when appending")}
 		>
 			{#snippet control()}
 				<Dropdown
@@ -243,8 +244,8 @@ function validateDestinationFile(raw: string) {
 
 		{#if placementSupportsEmbed(normalized.placement)}
 			<SettingItem
-				name="Link type"
-				desc="Choose whether to insert a link or an embed. Embeds transclude the note's contents at the placement position."
+				name={t("Link type")}
+				desc={t("Choose whether to insert a link or an embed. Embeds transclude the note's contents at the placement position.")}
 			>
 				{#snippet control()}
 					<Dropdown
@@ -258,8 +259,8 @@ function validateDestinationFile(raw: string) {
 
 		{#if placementSupportsSelectionAlias(normalized.placement) && normalizedLinkType === "link"}
 			<SettingItem
-				name="Link display text"
-				desc="What the inserted link displays. 'Selected text' keeps the highlighted text as the link's display text; with nothing selected, the plain link is inserted."
+				name={t("Link display text")}
+				desc={t("What the inserted link displays. 'Selected text' keeps the highlighted text as the link's display text; with nothing selected, the plain link is inserted.")}
 			>
 				{#snippet control()}
 					<Dropdown
@@ -273,15 +274,15 @@ function validateDestinationFile(raw: string) {
 
 		{#if placementSupportsFrontmatter(normalized.placement)}
 			<SettingItem
-				name="Frontmatter property"
-				desc="Required property to insert the link into."
+				name={t("Frontmatter property")}
+				desc={t("Required property to insert the link into.")}
 			>
 				{#snippet control()}
 					<input
 						type="text"
 						class="text-input"
 						value={normalized.frontmatterProperty ?? ""}
-						aria-label="Frontmatter property"
+						aria-label={t("Frontmatter property")}
 						aria-invalid={!(normalized.frontmatterProperty?.trim())}
 						placeholder="related"
 						required
@@ -291,8 +292,8 @@ function validateDestinationFile(raw: string) {
 			</SettingItem>
 
 			<SettingItem
-				name="Property handling"
-				desc="Choose how strict QuickAdd should be when the property is missing or not a list."
+				name={t("Property handling")}
+				desc={t("Choose how strict QuickAdd should be when the property is missing or not a list.")}
 			>
 				{#snippet control()}
 					<Dropdown
@@ -305,8 +306,8 @@ function validateDestinationFile(raw: string) {
 		{/if}
 	{:else}
 		<SettingItem
-			name="Destination file"
-			desc="Existing Markdown note that receives the link at the bottom."
+			name={t("Destination file")}
+			desc={t("Existing Markdown note that receives the link at the bottom.")}
 		>
 			{#snippet control()}
 				<ValidatedInput
@@ -316,9 +317,9 @@ function validateDestinationFile(raw: string) {
 					suggestions={markdownFilePaths}
 					maxSuggestions={50}
 					required
-					requiredMessage="Destination file is required"
+					requiredMessage={t("Destination file is required")}
 					validator={validateDestinationFile}
-					ariaLabel="Append link destination file"
+					ariaLabel={t("Append link destination file")}
 					onChange={onDestinationPathChange}
 				/>
 			{/snippet}

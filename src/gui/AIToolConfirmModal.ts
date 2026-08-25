@@ -1,5 +1,6 @@
 import type { App } from "obsidian";
 import { ButtonComponent, Modal } from "obsidian";
+import { t } from "src/i18n";
 
 export type ToolConfirmOutcome = "allow" | "allow-all" | "deny" | "abort";
 
@@ -48,10 +49,10 @@ export default class AIToolConfirmModal extends Modal {
 	private display() {
 		this.containerEl.addClass("quickAddModal", "qaAIToolConfirm");
 		this.contentEl.empty();
-		this.titleEl.textContent = `Run AI tool: ${this.toolName}?`;
+		this.titleEl.textContent = t("Run AI tool: {name}?", { name: this.toolName });
 
 		this.contentEl.createEl("p", {
-			text: "The AI requested this tool call with the arguments below.",
+			text: t("The AI requested this tool call with the arguments below."),
 		});
 
 		// Surface the model-chosen target (path/heading) as a labeled line so the
@@ -81,18 +82,18 @@ export default class AIToolConfirmModal extends Modal {
 		});
 
 		const abortBtn = new ButtonComponent(buttons)
-			.setButtonText("Abort run")
+			.setButtonText(t("Abort run"))
 			.onClick(() => this.submit("abort"));
 		const denyBtn = new ButtonComponent(buttons)
-			.setButtonText("Deny")
+			.setButtonText(t("Deny"))
 			.onClick(() => this.submit("deny"));
 		const allowAllBtn = new ButtonComponent(buttons)
-			.setButtonText("Approve all this run")
+			.setButtonText(t("Approve all this run"))
 			.onClick(() => this.submit("allow-all"));
 		// Deliberately NOT .setCta(): Approve runs a model-chosen action, so it must
 		// not be the bright primary button competing with the focused, safe Deny.
 		const allowBtn = new ButtonComponent(buttons)
-			.setButtonText("Approve")
+			.setButtonText(t("Approve"))
 			.onClick(() => this.submit("allow"));
 
 		// Focus the safe option.
@@ -129,8 +130,8 @@ export function summarizeToolCall(toolName: string, args: unknown): string {
 	const heading = typeof record.heading === "string" ? record.heading.trim() : "";
 	if (!path && !heading) return "";
 	const parts: string[] = [];
-	if (path) parts.push(`Target: ${path}`);
-	if (heading) parts.push(`Heading: ${heading}`);
+	if (path) parts.push(t("Target: {path}", { path }));
+	if (heading) parts.push(t("Heading: {heading}", { heading }));
 	return parts.join("  ·  ");
 }
 
