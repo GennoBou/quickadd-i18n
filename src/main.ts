@@ -4,6 +4,7 @@ import { Plugin, TFile, debounce } from "obsidian";
 import { QuickAddSettingsTab } from "./quickAddSettingsTab";
 import { DEFAULT_SETTINGS } from "./settings";
 import type { QuickAddSettings } from "./settings";
+import { initLocalizeJson } from "./i18n";
 import { log } from "./logger/logManager";
 import { ConsoleErrorLogger } from "./logger/consoleErrorLogger";
 import { GuiLogger } from "./logger/guiLogger";
@@ -111,6 +112,7 @@ export default class QuickAdd extends Plugin {
 	}
 
 	async onload() {
+		await initLocalizeJson(this.app, this.manifest);
 		log.logMessage("Loading QuickAdd");
 		setQuickAddInstance(this);
 
