@@ -17,29 +17,76 @@ For a task-oriented overview of prompts in general, see
 
 Go to **Settings → QuickAdd** and toggle **One-page input for choices**.
 
-It works with Template, Capture, and Macro choices. For Macros, only the inputs
-a script declares are collected (see [User scripts](#user-scripts-declare-inputs-optional)
-below).
+It works with Template, Capture, and Macro choices.
+
+When you run a Macro, the Templates and Captures you added to it share one
+form.
+
+The form stops at the first step that might fill in or skip later answers:
+another Macro, a Multi, a Conditional, a user script, or an AI command.
+Anything after that step is asked later. Another Macro gets its own form.
+QuickAdd does not guess which side of a Conditional will run.
+
+Two Captures in a row share one form. A Capture, then a user script, then
+another Capture do not share a form. You fill the first Capture now, and
+the second Capture later. If the user script lists its own inputs, those still appear
+on this form. See
+[User scripts](#user-scripts-declare-inputs-optional).
+
+To keep one Template or Capture off the form, set its **One-page input override**
+to **Never**.
 
 ## Turn it on or off for one choice {#per-choice-override}
 
-Template and Capture choice builders have a **One-page input override**
+Template, Capture, and Macro choice builders have a **One-page input override**
 dropdown that overrides the global setting for that one choice:
 
-- **Follow global setting** - use whatever the global toggle is set to (default).
+- **Follow global setting** - inherit the enclosing Macro's override, or use the global toggle (default).
 - **Always** - force the one-page form for this choice even when it is off globally.
 - **Never** - use step-by-step prompts for this choice even when it is on globally.
+
+### Macro overrides
+
+A Macro's override also applies to its steps, including steps that ask for inputs
+later. A step's explicit **Always** or **Never** takes precedence over its Macro.
+Nested Macros inherit the enclosing Macro's override unless they have their own.
+
+### Choose or create a note
+
+When a Template searches existing notes before creating, the one-page form includes
+its note picker alongside the Macro's Capture fields. Choose an existing note or
+create a new one. With **Open note**, Template fields appear only when creating.
+With an [existing-note update action](/docs/Choices/TemplateChoice/#search-existing),
+inputs needed by the template remain visible for the selected note. Inputs used
+only in the new note's name or folder stay hidden. Switching between notes keeps
+your drafts. Each Capture's anonymous `{{VALUE}}` has its own answer,
+separate from the note title. Named inputs such as `{{VALUE:details}}` remain shared.
+
+If that Template's override is **Never**, QuickAdd shows its note picker first.
+After the Template finishes, remaining eligible Capture inputs appear together
+in one form. Scripts and conditional steps retain their execution boundaries.
 
 ## What ends up in the form {#what-gets-collected}
 
 QuickAdd scans the choice for placeholders and turns each one into a field:
 
-- Placeholders in file names, templates, and capture content: `{{VALUE}}`, `{{VALUE:name}}`, `{{VDATE:name, YYYY-MM-DD}}`, `{{FIELD:name|...}}`, and `{{FILE:folder|...}}`.
+- Placeholders in file names, templates, capture content, and capture property names: `{{VALUE}}`, `{{VALUE:name}}`, `{{VDATE:name, YYYY-MM-DD}}`, `{{FIELD:name|...}}`, and `{{FILE:folder|...}}`.
 - Nested `{{TEMPLATE:path}}` includes are scanned recursively, so their prompts show up too.
 - `{{VALUE|type:multiline}}` and `{{VALUE:name|type:multiline}}` become textareas.
 - `{{VALUE:name|type:number|min:1|max:10}}` becomes a bounded numeric input, and `{{VALUE:name|type:slider|min:0|max:100|step:5}}` becomes a slider plus numeric input.
 - The capture target file, when you are capturing to a folder or a tag.
 - Inputs declared by a user script inside a macro, if the script provides them.
+
+For [property captures](/docs/Choices/CaptureChoice/#property), a plain `VALUE`
+input uses the property's Number or Checkbox widget when its type is known.
+If the property or its type is not known yet, QuickAdd asks for that value after
+resolving the target note and property. **Choose when capturing** also opens its
+property picker at runtime.
+
+Text and textarea fields support `[[` file links and `#` tags. **Peek at note**
+hides the whole form while you read or select text in the open note. **Insert
+selection** returns text to the last text field you focused, or the first text
+field if you have not focused one.
 
 ### How dates behave in the form {#date-ux}
 
@@ -97,9 +144,12 @@ fields left blank stay empty.
 ### Reserved internal variables {#internals-and-reserved-variables}
 
 QuickAdd uses reserved variable ids prefixed with `__qa.` for internal wiring
-during preflight and runtime. For example, `__qa.captureTargetFilePath` stores
-the capture target chosen in the form so the capture engine can skip its own
-file picker.
+during preflight and runtime. Capture-target flags are scoped by choice id
+(`__qa.captureTargetFilePath.<choiceId>`) so two captures in one macro get two
+distinct fields. The unscoped `value-__qa.captureTargetFilePath=…` flag still
+satisfies a collection that has exactly one capture-target field (a lone Capture,
+or a macro with one folder/tag capture). It does not satisfy two capture-target
+fields at once.
 
 These internal keys will not collide with your own variables. Avoid using the
 `__qa.` prefix in your scripts.

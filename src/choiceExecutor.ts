@@ -27,10 +27,22 @@ import {
 	type FrontmatterPropertyTarget,
 } from "./utils/frontmatterPropertyLinks";
 import type { QuickAddTriggerContext } from "./types/QuickAddTriggerContext";
+import type { RunClocks } from "./types/dateOrigin";
+import { normalizeDateOrigin } from "./types/dateOrigin";
+import { dateOriginForPick } from "./types/dateOriginPresets";
 import { childChoicesOf } from "./utils/choiceUtils";
+import { QA_INTERNAL_DATE_ORIGIN, VALUE_SYNTAX } from "./constants";
+import VDateInputPrompt from "./gui/VDateInputPrompt/VDateInputPrompt";
+import { planDateOrigin, dateFromStoredValue } from "./utils/resolveDateOrigin";
+import { log } from "./logger/logManager";
+import type { ICommand } from "./types/macros/ICommand";
+import { withPreparedChoiceInputs, clearPreparedChoiceInputs, createPreparedChoiceInputState, getPreparedTemplateNoteSelection } from "./preflight/preparedChoiceInputs";
+import { isTemplateChoice } from "./preflight/macroCommandRole";
+import { shouldRunTemplateNoteDiscovery } from "./utils/templateNoteDiscoveryEligibility";
 
 export class ChoiceExecutor implements IChoiceExecutor {
 	public variables: Map<string, unknown> = new Map<string, unknown>();
+	public readonly preparedInputs = createPreparedChoiceInputState();
 	// Default to interactive so every GUI entry point (command palette, ribbon,
 	// suggester) keeps its current prompt behaviour. Non-interactive callers (CLI
 	// without `ui`) flip this to false so engine prompts abort instead of hanging.
@@ -46,9 +58,12 @@ export class ChoiceExecutor implements IChoiceExecutor {
 	public readonly preloadedUserScripts = new Map<string, unknown>();
 	public focusedProperty: FrontmatterPropertyTarget | null = null;
 	public triggerContext: QuickAddTriggerContext | null = null;
+	public clocks?: RunClocks;
+	public pickDate = false;
 	private pendingAbort: MacroAbortError | null = null;
 	private pendingResult: ChoiceOutcome | null = null;
 	private executionDepth = 0;
+	private macroOnePageInput: IChoice["onePageInput"];
 	private focusedPropertyOverride: FrontmatterPropertyTarget | null | undefined;
 	private triggerContextOverride: QuickAddTriggerContext | null | undefined;
 
@@ -92,6 +107,10 @@ export class ChoiceExecutor implements IChoiceExecutor {
 				this.triggerContextOverride !== undefined
 					? this.triggerContextOverride
 					: { activeFile: this.app.workspace.getActiveFile() };
+			this.clocks = {
+				now: this.clocks?.now ?? new Date(),
+				date: this.clocks?.date,
+			};
 		}
 		this.executionDepth++;
 	}
@@ -101,6 +120,8 @@ export class ChoiceExecutor implements IChoiceExecutor {
 		if (this.executionDepth === 0) {
 			this.focusedProperty = null;
 			this.triggerContext = null;
+			this.clocks = undefined;
+			this.pickDate = false;
 			// Preloaded script modules are scoped to ONE outermost execution: a
 			// cancelled/aborted run must not strand its entries, or a later
 			// trigger on a long-lived executor (api.executeChoice callers reuse
@@ -108,6 +129,7 @@ export class ChoiceExecutor implements IChoiceExecutor {
 			// Cleared at the END so the CLI's collect-then-execute handoff (which
 			// populates the map before execute() begins) still works.
 			this.preloadedUserScripts.clear();
+			clearPreparedChoiceInputs(this);
 		}
 	}
 
@@ -124,39 +146,42 @@ export class ChoiceExecutor implements IChoiceExecutor {
 		promptDraftStore.beginExecutionScope();
 		try {
 			await this.runOnePagePreflightIfEnabled(choice);
+			await withPreparedChoiceInputs(this, choice.id, async () => {
+				await this.applyDateOrigin(choice);
 
-			switch (choice.type) {
-				case "Template": {
-					const templateChoice: ITemplateChoice =
-						choice as ITemplateChoice;
-					await this.onChooseTemplateType(templateChoice, originLeaf);
-					break;
+				switch (choice.type) {
+					case "Template": {
+						const templateChoice: ITemplateChoice =
+							choice as ITemplateChoice;
+						await this.onChooseTemplateType(templateChoice, originLeaf);
+						break;
+					}
+					case "Capture": {
+						const captureChoice: ICaptureChoice = choice as ICaptureChoice;
+						await this.onChooseCaptureType(captureChoice, originLeaf);
+						break;
+					}
+					case "Macro": {
+						const macroChoice: IMacroChoice = choice as IMacroChoice;
+						await this.onChooseMacroType(macroChoice, originLeaf);
+						break;
+					}
+					case "Multi": {
+						const multiChoice: IMultiChoice = choice as IMultiChoice;
+						await this.onChooseMultiType(multiChoice);
+						break;
+					}
+					default:
+						break;
 				}
-				case "Capture": {
-					const captureChoice: ICaptureChoice = choice as ICaptureChoice;
-					await this.onChooseCaptureType(captureChoice, originLeaf);
-					break;
-				}
-				case "Macro": {
-					const macroChoice: IMacroChoice = choice as IMacroChoice;
-					await this.onChooseMacroType(macroChoice, originLeaf);
-					break;
-				}
-				case "Multi": {
-					const multiChoice: IMultiChoice = choice as IMultiChoice;
-					await this.onChooseMultiType(multiChoice);
-					break;
-				}
-				default:
-					break;
-			}
 
-			if (this.pendingAbort) {
-				promptDraftStore.rollbackExecutionScope();
-				return;
-			}
+				if (this.pendingAbort) {
+					promptDraftStore.rollbackExecutionScope();
+					return;
+				}
 
-			promptDraftStore.commitExecutionScope();
+				promptDraftStore.commitExecutionScope();
+			});
 		} catch (error) {
 			promptDraftStore.rollbackExecutionScope();
 			throw error;
@@ -208,32 +233,35 @@ export class ChoiceExecutor implements IChoiceExecutor {
 		promptDraftStore.beginExecutionScope();
 		try {
 			await this.runOnePagePreflightIfEnabled(choice);
+			return await withPreparedChoiceInputs(this, choice.id, async (): Promise<ChoiceOutcome> => {
+				await this.applyDateOrigin(choice);
 
-			if (choice.type === "Template") {
-				await this.onChooseTemplateType(choice as ITemplateChoice, originLeaf);
-			} else {
-				await this.onChooseCaptureType(choice as ICaptureChoice, originLeaf);
-			}
+				if (choice.type === "Template") {
+					await this.onChooseTemplateType(choice as ITemplateChoice, originLeaf);
+				} else {
+					await this.onChooseCaptureType(choice as ICaptureChoice, originLeaf);
+				}
 
-			if (this.pendingAbort) {
-				promptDraftStore.rollbackExecutionScope();
-				const abort = this.consumeAbortSignal();
-				const isUser = abort instanceof UserCancelError;
-				return {
-					status: "cancelled",
-					cancelKind: isUser ? "user" : "aborted",
-					// Only surface the message for an involuntary abort (e.g. the
-					// non-interactive prompt guards). A user dismissal keeps its stable
-					// "cancelled by user" text and leaks no internals.
-					reason: isUser ? undefined : abort?.message,
-				};
-			}
+				if (this.pendingAbort) {
+					promptDraftStore.rollbackExecutionScope();
+					const abort = this.consumeAbortSignal();
+					const isUser = abort instanceof UserCancelError;
+					return {
+						status: "cancelled",
+						cancelKind: isUser ? "user" : "aborted",
+						// Only surface the message for an involuntary abort (e.g. the
+						// non-interactive prompt guards). A user dismissal keeps its stable
+						// "cancelled by user" text and leaks no internals.
+						reason: isUser ? undefined : abort?.message,
+					};
+				}
 
-			promptDraftStore.commitExecutionScope();
-			const result = this.pendingResult;
-			this.pendingResult = null;
-			// No success recorded and no abort => the engine swallowed a failure.
-			return result ?? { status: "error" };
+				promptDraftStore.commitExecutionScope();
+				const result = this.pendingResult;
+				this.pendingResult = null;
+				// No success recorded and no abort => the engine swallowed a failure.
+				return result ?? { status: "error" };
+			});
 		} catch (error) {
 			promptDraftStore.rollbackExecutionScope();
 			if (error instanceof UserCancelError) {
@@ -253,10 +281,98 @@ export class ChoiceExecutor implements IChoiceExecutor {
 		}
 	}
 
+	private async applyDateOrigin(choice: IChoice): Promise<void> {
+		if (
+			isTemplateChoice(choice) &&
+			(choice.existingNoteAction ?? "open") === "open" &&
+			getPreparedTemplateNoteSelection(this, choice.id)?.kind === "existing" &&
+			shouldRunTemplateNoteDiscovery(
+				choice,
+				choice.fileNameFormat.enabled ? choice.fileNameFormat.format : VALUE_SYNTAX,
+				this.variables.get("value"),
+			)
+		) {
+			// Opening an existing note must not prompt for hidden creation inputs.
+			return;
+		}
+		const setting = this.pickDate
+			? dateOriginForPick(normalizeDateOrigin(choice.dateOrigin))
+			: normalizeDateOrigin(choice.dateOrigin);
+		const reservedSeed =
+			setting?.kind === "ask"
+				? this.variables.get(QA_INTERNAL_DATE_ORIGIN)
+				: undefined;
+		const plan = planDateOrigin({
+			setting,
+			clocks: this.clocks,
+			variables: this.variables,
+			reservedSeed,
+		});
+
+		if (plan.status === "inherit") return;
+
+		if (plan.status === "error") {
+			log.logError(plan.message);
+			throw new ChoiceAbortError(plan.message);
+		}
+
+		if (plan.status === "set") {
+			this.clocks = {
+				now: this.clocks?.now ?? new Date(),
+				date: plan.date,
+			};
+			return;
+		}
+
+		if (this.interactive === false && !this.promptProvider) {
+			throw new ChoiceAbortError(
+				`"${choice.name}" needs a date. Re-run with date= or the ui flag.`,
+			);
+		}
+
+		const header = `Date for ${choice.name}`;
+		try {
+			const raw = this.promptProvider
+				? await this.promptProvider.datePrompt(header, {
+						defaultValue: plan.defaultValue,
+						dateFormat: "YYYY-MM-DD",
+					})
+				: await VDateInputPrompt.Prompt(
+						this.app,
+						header,
+						undefined,
+						plan.defaultValue,
+						"YYYY-MM-DD",
+					);
+			const date = dateFromStoredValue(raw);
+			if (!date) {
+				throw new ChoiceAbortError("Could not parse the date origin.");
+			}
+			this.clocks = {
+				now: this.clocks?.now ?? new Date(),
+				date,
+			};
+		} catch (error) {
+			if (isCancellationError(error)) {
+				throw new UserCancelError("Date origin cancelled by user");
+			}
+			throw error;
+		}
+	}
+
+	async prepareMacroInputs(choice: IMacroChoice, commands: ICommand[]): Promise<void> {
+		if (commands.length === 0) return;
+		const remainingChoice: IMacroChoice = {
+			...choice,
+			macro: { ...choice.macro, commands },
+		};
+		await this.runOnePagePreflightIfEnabled(remainingChoice);
+	}
+
 	private async runOnePagePreflightIfEnabled(choice: IChoice): Promise<void> {
 		// One-page preflight honoring per-choice override.
 		const globalEnabled = settingsStore.getState().onePageInputEnabled;
-		const override = choice.onePageInput;
+		const override = choice.onePageInput ?? this.macroOnePageInput;
 		// A remote interactive run (Raycast) has no in-app modal fallback, so it must
 		// collect a choice's declared inputs up front via the provider regardless of
 		// the global one-page setting - otherwise those inputs are never gathered and
@@ -327,7 +443,13 @@ export class ChoiceExecutor implements IChoiceExecutor {
 			undefined,
 			originLeaf,
 		);
-		await macroEngine.run();
+		const previousOverride = this.macroOnePageInput;
+		this.macroOnePageInput = macroChoice.onePageInput ?? previousOverride;
+		try {
+			await macroEngine.run();
+		} finally {
+			this.macroOnePageInput = previousOverride;
+		}
 
 		Object.entries(macroEngine.params.variables).forEach(([key, value]) => {
 			this.variables.set(key, value as string);

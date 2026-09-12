@@ -798,5 +798,19 @@
   "Yes": "はい",
   "You'll pick a heading from the target note when you run this capture, and the text is inserted under it. Use the toggles below to control placement within that section.": "このキャプチャの実行時に対象ノートから見出しを選択し、テキストはその下に挿入されます。そのセクション内の配置を制御するには以下のトグルを使用してください。",
   "your choices": "Choice一覧",
-  "your global variables": "グローバル変数一覧"
+  "your global variables": "グローバル変数一覧",
+  "Show matching notes and unresolved links in the note-title prompt.": "ノートタイトルプロンプトに一致するノートと未解決のリンクを表示します。",
+  "If a new note's path already exists": "新しいノートのパスが既に存在する場合",
+  "Property": "プロパティ",
+  "Named property": "指定したプロパティ",
+  "Choose when capturing": "キャプチャ時に選択",
+  "Property name": "プロパティ名",
+  "Property name is required": "プロパティ名は必須です",
+  "Add captured values to the property's list, keeping existing items and skipping duplicates.": "既存の項目を保持し重複をスキップして、キャプチャした値をプロパティのリストに追加します。",
+  "Replace the property's value with the captured value.": "プロパティの値をキャプチャした値で置き換えます。",
+  "Set value": "値を設定",
+  "Add to list": "リストに追加",
+  "Create property if missing": "プロパティが存在しない場合は作成",
+  "Name pasted images after the note title": "貼り付けた画像の名前をノートタイトルにする",
+  "When on, clipboard images saved by QuickAdd (pasting into a prompt, or {{CLIPBOARD}} with an image and no text) are named after the destination note. When the destination is not yet known, QuickAdd keeps the timestamp name. Duplicate names are handled by Obsidian's attachment folder setting.": "有効にすると、QuickAddによって保存されたクリップボード画像（プロンプトへの貼り付け、またはテキストのない画像のみの{{CLIPBOARD}}）の名前が保存先ノートの名前に基づいて設定されます。保存先がまだ不明な場合、タイムスタンプ名が維持されます。名前の重複はObsidianの添付ファイルフォルダ設定によって処理されます。"
 }

@@ -144,7 +144,7 @@ Opens a prompt that asks for text input.
 - `placeholder`: (Optional) Placeholder text in the input field
 - `value`: (Optional) Default value
 - `options.cursorAtEnd`: (Optional) When `true`, places the caret after the default value instead of selecting it
-- `options.imagePaste`: (Optional) Accept clipboard-image paste: the image is saved as a vault attachment (per Obsidian's attachment settings) and an embed link is inserted at the caret. Clipboard text always wins over an image. Only enable this when the value flows into note content - an embed link in a file name or path would corrupt it. `sourcePath` is the note path the link will live in when known; omit it to get vault-root links that resolve from anywhere.
+- `options.imagePaste`: (Optional) Accept pasted or dropped images. QuickAdd saves each image as a vault attachment and inserts an embed link at the caret, except a vault image included in a file drop, which is embedded in place without copying. Clipboard text wins on paste. Image files win on drop because file managers also provide the filesystem path as text. Dropped images keep a sanitized original file name. Only enable this when the value flows into note content. File name and path prompts never accept images because an embed link would corrupt the path. `sourcePath` is the note path the link will live in when known. Omit it to get vault-root links that resolve from anywhere.
 
 **Returns:** Promise resolving to the entered string.
 
@@ -407,7 +407,7 @@ console.log("Enabled features:", features);
 
 ## Choice Execution
 
-### `executeChoice(choiceName: string, variables?: {[key: string]: any}): Promise<void>`
+### `executeChoice(choiceName: string, variables?: {[key: string]: any}, options?: { date?: string | Date }): Promise<void>`
 Executes another QuickAdd choice programmatically. This is a one-way trigger: it passes variables into the target choice, waits for that choice to finish, and resolves with `undefined`. It does not return data from the target choice to the caller. After the target choice finishes, QuickAdd clears the temporary variable map used by that API execution. If you call it from inside a Macro script, do not expect the caller's current `params.variables` values to still be available afterward unless you saved or restored them yourself.
 
 For the Macro data-flow implications, see [`executeChoice` is a trigger](/docs/VariablesDataFlow/#executechoice-is-a-trigger).
@@ -415,6 +415,8 @@ For the Macro data-flow implications, see [`executeChoice` is a trigger](/docs/V
 **Parameters:**
 - `choiceName`: Name of the choice to execute
 - `variables`: (Optional) Variables to pass to the choice
+- `options.date`: (Optional) The day `{{DATE}}` should use. Pass a `Date`,
+  `last week`, or `"ask"` if you want the picker.
 
 **Example:**
 ```javascript
@@ -425,6 +427,8 @@ await quickAddApi.executeChoice("Create Meeting Note", {
     date: "2024-01-15",
     value: "Main agenda content"  // Special: maps to {{VALUE}}
 });
+
+await quickAddApi.executeChoice("Weekly review", {}, { date: "lw" });
 ```
 
 Batch processing example:

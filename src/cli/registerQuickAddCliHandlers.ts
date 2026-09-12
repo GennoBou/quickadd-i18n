@@ -8,11 +8,13 @@ import type QuickAdd from "../main";
 import {
 	collectChoiceRequirements,
 	getUnresolvedRequirements,
+	listDeferredMacroSteps,
 } from "../preflight/collectChoiceRequirements";
 import type { FieldRequirement } from "../preflight/RequirementCollector";
 import { interactivePromptServer } from "../interactive/interactivePromptServer";
 import { RemotePromptProvider } from "../interactive/promptProvider";
 import type IChoice from "../types/choices/IChoice";
+import { QA_INTERNAL_DATE_ORIGIN } from "../constants";
 import {
 	childChoicesOf,
 	isChoiceLike,
@@ -20,6 +22,13 @@ import {
 } from "../utils/choiceUtils";
 import type ITemplateChoice from "../types/choices/ITemplateChoice";
 import type ICaptureChoice from "../types/choices/ICaptureChoice";
+import type IMacroChoice from "../types/choices/IMacroChoice";
+import { applyInvocationDate } from "../utils/resolveDateOrigin";
+import {
+	SAVE_CLIPBOARD_IMAGE_COMMAND,
+	SAVE_CLIPBOARD_IMAGE_FLAGS,
+	saveClipboardImageHandler,
+} from "./saveClipboardImageCli";
 import {
 	analysePackagePreview,
 	readQuickAddPackage,
@@ -81,6 +90,11 @@ const RUN_FLAGS: CliFlags = {
 		description:
 			"Report the verified outcome for Template/Capture choices (file path and effect on success, honest failure when the engine swallows an error)",
 	},
+	date: {
+		value: "<when>",
+		description:
+			"Day for {{DATE}} (YYYY-MM-DD, last week, last friday, ask, @date:ISO)",
+	},
 };
 
 const LIST_FLAGS: CliFlags = {
@@ -104,6 +118,11 @@ const RUN_TEMPLATE_FLAGS: CliFlags = {
 	},
 	ui: {
 		description: "Allow interactive prompts",
+	},
+	date: {
+		value: "<when>",
+		description:
+			"Day for {{DATE}} (YYYY-MM-DD, last week, last friday, ask, @date:ISO)",
 	},
 };
 
@@ -163,8 +182,14 @@ const RESERVED_RUN_PARAMS = new Set<string>([
 	"vars",
 	"ui",
 	"verify",
+	"date",
 ]);
-const RESERVED_RUN_TEMPLATE_PARAMS = new Set<string>(["path", "vars", "ui"]);
+const RESERVED_RUN_TEMPLATE_PARAMS = new Set<string>([
+	"path",
+	"vars",
+	"ui",
+	"date",
+]);
 const RESERVED_CHECK_PARAMS = new Set<string>(["choice", "id", "vars", "fields"]);
 const RESERVED_INTERACTIVE_PARAMS = new Set<string>(["choice", "id", "vars"]);
 
@@ -176,6 +201,7 @@ const CLI_COMMANDS = {
 	check: "quickadd:check",
 	preview: "quickadd:package-preview",
 	interactive: "quickadd:interactive",
+	saveClipboardImage: SAVE_CLIPBOARD_IMAGE_COMMAND,
 } as const;
 
 const SUPPORTED_LIST_TYPES = new Set(["template", "capture", "macro", "multi"]);
@@ -340,6 +366,10 @@ function describeChoice(choice: IChoice) {
 	};
 }
 
+function isMacroChoice(choice: IChoice): choice is IMacroChoice {
+	return choice.type === "Macro";
+}
+
 /**
  * Shared execution tail for any already-resolved choice (persisted via
  * `quickadd:run` or built ad-hoc via `quickadd:run-template`): variable wiring,
@@ -378,6 +408,14 @@ async function runResolvedChoice(
 			plugin,
 		) as IChoiceExecutor;
 		setExecutorVariables(choiceExecutor, variables);
+		if (!applyInvocationDate(choiceExecutor, params.date)) {
+			return serialize({
+				ok: false,
+				command,
+				error: `Could not parse date origin '${params.date}'.`,
+				choice: describeChoice(choice),
+			});
+		}
 
 		const interactiveMode = isTruthy(params.ui);
 		// Without `ui`, engine prompts the requirement collector can't pre-satisfy
@@ -407,8 +445,10 @@ async function runResolvedChoice(
 					error: "Missing required inputs for non-interactive CLI run.",
 					choice: describeChoice(choice),
 					missing: unresolved.map(toMissingFieldSummary),
-					missingFlags: unresolved.map(
-						(requirement) => `value-${requirement.id}=<value>`,
+					missingFlags: unresolved.map((requirement) =>
+						requirement.id === QA_INTERNAL_DATE_ORIGIN
+							? "date=<when>"
+							: `value-${requirement.id}=<value>`,
 					),
 				});
 			}
@@ -712,6 +752,9 @@ async function checkChoiceHandler(
 			missingFlags: unresolved.map(
 				(requirement) => `value-${requirement.id}=<value>`,
 			),
+			...(isMacroChoice(choice)
+				? { deferred: listDeferredMacroSteps(plugin, choice, choiceExecutor.variables.get("value")) }
+				: {}),
 		});
 	} catch (error) {
 		return serialize({
@@ -967,6 +1010,12 @@ export function registerQuickAddCliHandlers(plugin: QuickAdd): boolean {
 		"Run a choice interactively: forwards its runtime prompts to the caller over a local server (returns host/port/sessionId/token to attach)",
 		INTERACTIVE_FLAGS,
 		(params: CliData) => interactiveHandler(plugin, params),
+	);
+	register(
+		CLI_COMMANDS.saveClipboardImage,
+		"Save a 1x1 PNG as a vault attachment using QuickAdd clipboard-image naming",
+		SAVE_CLIPBOARD_IMAGE_FLAGS,
+		(params: CliData) => saveClipboardImageHandler(plugin, params),
 	);
 
 	log.logMessage("Registered QuickAdd CLI handlers.");

@@ -282,6 +282,12 @@ commands share the same name, rename one before using the selector form.
 
 ![The Macro builder, including the Run on startup toggle](../Images/choices/macro-builder.png)
 
+### Which day {#date-origin}
+
+Same [Which day](/docs/Choices/TemplateChoice/#date-origin) setting as a
+Template. Child choices in the macro inherit that day, so a weekly pack can
+ask once and then write every template for last week.
+
 ### Run on startup {#run-on-startup}
 
 Enable this to run a macro automatically when Obsidian starts. Handy for:
@@ -289,6 +295,15 @@ Enable this to run a macro automatically when Obsidian starts. Handy for:
 - Creating a daily note automatically
 - Setting up your workspace
 - Running maintenance tasks
+
+### Command palette {#command-palette}
+
+**Add to command palette** is the same switch as the lightning bolt in the
+choice list. Once it is on, and Which day isn't **Ask each time**, **Also add
+"Name (pick a day)"** registers a second command that asks which day before
+the macro runs. See
+[Command palette](/docs/Choices/TemplateChoice/#command-palette) on the
+Template page.
 
 ## Practical examples {#practical-examples}
 

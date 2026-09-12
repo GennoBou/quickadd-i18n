@@ -1,3 +1,4 @@
+import { createChoiceExecutor } from "../tests/helpers/createChoiceExecutor";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { App } from "obsidian";
 import type QuickAdd from "./main";
@@ -177,11 +178,14 @@ function makeApp(overrides: Record<string, unknown> = {}) {
 
 function makeChoiceExecutor() {
 	return {
+		...createChoiceExecutor(),
 		variables: new Map<string, unknown>(),
 		execute: vi.fn(async () => {}),
 		consumeAbortSignal: vi.fn(
 			(): InstanceType<typeof MacroAbortError> | null => null,
 		),
+		pickDate: false as boolean | undefined,
+		clocks: undefined as { now: Date; date?: Date } | undefined,
 	};
 }
 
@@ -1000,6 +1004,26 @@ describe("executeChoice", () => {
 		const { api } = getApi(makeApp(), makePlugin(), executor);
 		await api.executeChoice("C");
 		expect(executor.execute).toHaveBeenCalled();
+	});
+
+	it("treats date ask as pickDate and still executes", async () => {
+		const executor = makeChoiceExecutor();
+		const { api } = getApi(makeApp(), makePlugin(), executor);
+		await api.executeChoice("C", {}, { date: "ask" });
+		expect(executor.execute).toHaveBeenCalled();
+		expect(executor.pickDate).toBe(true);
+		expect(executor.clocks).toBeUndefined();
+	});
+
+	it("rejects an invalid Date origin and does not execute", async () => {
+		const executor = makeChoiceExecutor();
+		const { api } = getApi(makeApp(), makePlugin(), executor);
+		executor.variables.set("keep", "caller");
+		await api.executeChoice("C", { leak: "nope" }, { date: new Date("bad") });
+		expect(executor.execute).not.toHaveBeenCalled();
+		expect(mocks.reportError).toHaveBeenCalled();
+		expect(executor.variables.get("keep")).toBe("caller");
+		expect(executor.variables.has("leak")).toBe(false);
 	});
 });
 
