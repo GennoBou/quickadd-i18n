@@ -17,6 +17,7 @@ import { TFile, TFolder } from "obsidian";
 import { DATE_VARIABLE_REGEX, GLOBAL_VAR_REGEX, TITLE_REGEX } from "../constants";
 import type { IDateParser } from "../parsers/IDateParser";
 import { NLDParser } from "../parsers/NLDParser";
+import type { RunClocks } from "../types/dateOrigin";
 import {
 	getVariableExample,
 	getMacroPreview,
@@ -37,7 +38,7 @@ import {
 } from "../utils/generatedFilePath";
 import { getTemplateFile } from "../utils/templateFolderUtils";
 import { getValueVariableBaseName } from "../utils/valueSyntax";
-import { EnhancedFieldSuggestionFileFilter } from "../utils/EnhancedFieldSuggestionFileFilter";
+import { FieldSuggestionFileFilter } from "../utils/FieldSuggestionFileFilter";
 import { FILE_CUSTOM_PREFIX, FILE_PICK_PREFIX, type ParsedFileToken } from "../utils/fileSyntax";
 
 import type QuickAdd from "../main";
@@ -116,6 +117,14 @@ export class FileNameDisplayFormatter extends Formatter {
 	 * previous one's complaints.
 	 */
 	public diagnostics = new PreviewDiagnostics();
+
+	/**
+	 * The run's calendar origin. Without it a `Daily/{{DATE}}` preview shows
+	 * today while the run, aimed at yesterday by Which day, writes another file.
+	 */
+	public setRunClocks(clocks: RunClocks | undefined): void {
+		this.clocks = clocks;
+	}
 
 	protected warn(message: string): void {
 		this.diagnostics.add("warning", message);
@@ -616,7 +625,7 @@ export class FileNameDisplayFormatter extends Formatter {
 	protected suggestForFile(parsed: ParsedFileToken): string {
 		// Preview: show a representative real file, else a placeholder. Never prompt.
 		const files = this.app
-			? EnhancedFieldSuggestionFileFilter.filterFiles(
+			? FieldSuggestionFileFilter.filterFiles(
 					this.app.vault.getMarkdownFiles(),
 					parsed.filter,
 					(file) => this.app!.metadataCache.getFileCache(file),

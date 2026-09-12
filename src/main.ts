@@ -31,6 +31,13 @@ import migrate from "./migrations/migrate";
 import { settingsStore } from "./settingsStore";
 import { UpdateModal } from "./gui/UpdateModal/UpdateModal";
 import { FieldSuggestionCache } from "./utils/FieldSuggestionCache";
+import { deepClone } from "./utils/deepClone";
+import {
+	reconcileSettingsPersistPlan,
+	settingsValuesEqual,
+	shouldApplyPersistedWriteToStore,
+	threeWayMergeSettings,
+} from "./utils/settingsPersistMerge";
 import { interactivePromptServer } from "./interactive/interactivePromptServer";
 import { parseSemver } from "./utils/semver";
 import {
@@ -41,10 +48,18 @@ import {
 	rootChoicesOf,
 } from "./utils/choiceUtils";
 import { isReservedVariableKey } from "./utils/reservedVariableKeys";
+import { applyInvocationDate } from "./utils/resolveDateOrigin";
+import {
+	choiceCommandId,
+	pickDayCommandId,
+	pickDayCommandName,
+	shouldRegisterPickDayCommand,
+} from "./types/choiceCommands";
 import { registerQuickAddCliHandlers } from "./cli/registerQuickAddCliHandlers";
 import { autoSyncEnabledProviders } from "./ai/modelSyncService";
 import { QUICK_ADD_COMMAND_LABELS } from "./commandLabels";
 import { PromptPeekSession } from "./gui/promptPeek/PromptPeekSession";
+import { ingestImagesIntoActivePrompt as ingestPromptImages } from "./gui/imagePasteHandler";
 import { setQuickAddInstance } from "./quickAddInstance";
 import { applyTemplateToNote } from "./engine/applyTemplateToActiveNote";
 import type ITemplateChoice from "./types/choices/ITemplateChoice";
@@ -65,6 +80,7 @@ type CaptureValueParameters = { [key in `value-${string}`]?: string };
 
 interface DefinedUriParameters {
 	choice?: string; // Name
+	date?: string;
 }
 
 // x-callback-url parameters (Apple Shortcuts, etc.). The hyphenated keys arrive
@@ -88,6 +104,20 @@ const SETTINGS_SAVE_DEBOUNCE_MS = 1000;
 export default class QuickAdd extends Plugin {
 	settings: QuickAddSettings;
 	private unsubscribeSettingsStore: () => void;
+	/**
+	 * Snapshot of settings as of the last successful load/save. Used as the
+	 * 3-way-merge base so a whole-file write cannot clobber newer on-disk fields
+	 * that this instance never edited (see #1749 / background model sync).
+	 */
+	private lastPersistedSettings: QuickAddSettings | null = null;
+	/**
+	 * When true, the settingsStore subscriber updates `this.settings` but does
+	 * not schedule a disk write. Set while applying a conflict-merge result back
+	 * into the store after that result has already been (or is about to be) saved.
+	 */
+	private suppressSettingsSave = false;
+	/** Serialize persist calls so overlapping debounced/immediate saves cannot race. */
+	private persistChain: Promise<void> = Promise.resolve();
 	// Debounced disk write for the store subscriber. saveSettings() stays immediate
 	// (migrations await it) and cancels this; onunload flushes it.
 	//
@@ -99,7 +129,7 @@ export default class QuickAdd extends Plugin {
 	// silently did not persist. Awaiting inside a QuickAdd frame puts us on the stack.
 	private requestSave: Debouncer<[], void> = debounce(() => {
 		void (async () => {
-			await this.saveData(this.settings);
+			await this.persistSettings();
 		})();
 	}, SETTINGS_SAVE_DEBOUNCE_MS);
 
@@ -111,6 +141,10 @@ export default class QuickAdd extends Plugin {
 		);
 	}
 
+	ingestImagesIntoActivePrompt(files: File[]) {
+		return ingestPromptImages(files);
+	}
+
 	async onload() {
 		await initLocalizeJson(this.app, this.manifest);
 		log.logMessage("Loading QuickAdd");
@@ -120,7 +154,9 @@ export default class QuickAdd extends Plugin {
 		settingsStore.replaceState(this.settings);
 		this.unsubscribeSettingsStore = settingsStore.subscribe((settings) => {
 			this.settings = settings;
-			this.requestSave();
+			if (!this.suppressSettingsSave) {
+				this.requestSave();
+			}
 		});
 
 		this.addCommand({
@@ -284,7 +320,13 @@ export default class QuickAdd extends Plugin {
 			}
 
 			const choiceExecutor = new ChoiceExecutor(this.app, this);
-			this.applyUriValueParameters(choiceExecutor, parameters);
+			if (!this.applyUriValueParameters(choiceExecutor, parameters)) {
+				log.logWarning(
+					`QuickAdd URI: could not parse date origin '${parameters.date}'.`,
+				);
+				this.fireUriError(targets, "execution-failed");
+				return;
+			}
 
 			const outcome = await choiceExecutor.executeWithOutcome(
 				choice as ITemplateChoice | ICaptureChoice,
@@ -406,7 +448,13 @@ export default class QuickAdd extends Plugin {
 		// wrong choice is at least diagnosable.
 		this.warnIfChoiceNameAmbiguous(parameters.choice);
 		const choiceExecutor = new ChoiceExecutor(this.app, this);
-		this.applyUriValueParameters(choiceExecutor, parameters);
+		if (!this.applyUriValueParameters(choiceExecutor, parameters)) {
+			reportError(
+				new Error(`Could not parse date origin '${parameters.date}'`),
+				"URI handler error",
+			);
+			return;
+		}
 		try {
 			await choiceExecutor.execute(choice);
 		} catch (err) {
@@ -419,7 +467,7 @@ export default class QuickAdd extends Plugin {
 	private applyUriValueParameters(
 		choiceExecutor: ChoiceExecutor,
 		parameters: UriParameters,
-	): void {
+	): boolean {
 		Object.entries(parameters)
 			.filter(([key]) => key.startsWith("value-"))
 			.forEach(([key, value]) => {
@@ -437,6 +485,10 @@ export default class QuickAdd extends Plugin {
 					choiceExecutor.variables.set(variableName, value);
 				}
 			});
+		if (!applyInvocationDate(choiceExecutor, parameters.date)) {
+			return false;
+		}
+		return true;
 	}
 
 	/**
@@ -508,12 +560,16 @@ export default class QuickAdd extends Plugin {
 		PromptPeekSession.getActive()?.cancel();
 	}
 
-	async loadSettings() {
-		const loadedData = await this.loadData();
+	/**
+	 * Normalize raw `data.json` into the in-memory settings shape. Shared by the
+	 * initial load and by conflict-aware saves so the 3-way-merge base/disk legs
+	 * use the same defaults / coerce / id-heal rules.
+	 */
+	private normalizeLoadedSettings(loadedData: unknown): QuickAddSettings {
 		const settings = Object.assign(
 			{},
 			DEFAULT_SETTINGS,
-			loadedData,
+			loadedData ?? {},
 		) as QuickAddSettings & {
 			announceUpdates: QuickAddSettings["announceUpdates"] | boolean;
 		};
@@ -534,14 +590,140 @@ export default class QuickAdd extends Plugin {
 			settings.choices = dedupeChoicesById(settings.choices);
 		}
 
+		return settings as QuickAddSettings;
+	}
+
+	async loadSettings() {
+		const loadedData = await this.loadData();
+		const settings = this.normalizeLoadedSettings(loadedData);
 		this.settings = settings;
+		// Deep-clone so later in-place store edits cannot mutate the merge base.
+		this.lastPersistedSettings = deepClone(settings);
 	}
 
 	async saveSettings() {
 		// Immediate, awaitable write (migrations rely on this). Supersede any pending
 		// debounced write so the same settings aren't redundantly rewritten after.
 		this.requestSave.cancel();
-		await this.saveData(this.settings);
+		await this.persistSettings();
+	}
+
+	/**
+	 * Whole-file settings write with a disk-aware merge. If `data.json` changed
+	 * since `lastPersistedSettings` (another device/sync, hand edit, …), local
+	 * mutations are three-way-merged onto the on-disk value instead of replacing
+	 * the file with a stale in-memory snapshot (#1749).
+	 *
+	 * Obsidian's `loadData` / `saveData` expose no compare-and-swap, file lock, or
+	 * version token, so a TOCTOU window remains between the final re-read below
+	 * and `saveData`. We narrow that window with a last-look revalidation; we
+	 * cannot close it with the public Plugin API alone.
+	 */
+	private persistSettings(): Promise<void> {
+		const run = async () => {
+			const base = this.lastPersistedSettings;
+
+			const readDisk = async (): Promise<QuickAddSettings | null> => {
+				if (!base) return null;
+				return this.normalizeLoadedSettings(await this.loadData());
+			};
+
+			let disk = await readDisk();
+
+			const buildPlan = (diskSnapshot: QuickAddSettings | null) => {
+				// Capture local AFTER the disk read so updates that landed while
+				// loadData() was in flight are included, then fold any further
+				// live-store drift onto that plan (Codex P1 / CodeRabbit on #1750).
+				const local = deepClone(this.settings);
+				return reconcileSettingsPersistPlan({
+					base,
+					disk: diskSnapshot,
+					local,
+					currentStore: this.settings,
+				});
+			};
+
+			const applyStoreReplace = (
+				plan: ReturnType<typeof reconcileSettingsPersistPlan<QuickAddSettings>>,
+			) => {
+				if (
+					plan.shouldReplaceStore &&
+					settingsValuesEqual(this.settings, plan.local)
+				) {
+					this.suppressSettingsSave = true;
+					try {
+						settingsStore.replaceState(plan.toWrite);
+						this.settings = plan.toWrite;
+					} finally {
+						this.suppressSettingsSave = false;
+					}
+				}
+			};
+
+			let plan = buildPlan(disk);
+
+			if (plan.didMerge) {
+				log.logMessage(
+					"[Settings] data.json changed on disk since the last QuickAdd write; merged in-memory changes with on-disk settings before saving.",
+				);
+			}
+
+			applyStoreReplace(plan);
+
+			// Last-look disk revalidation before saveData. Still racy without CAS
+			// (see method doc); this only shrinks the window after the first merge.
+			if (base) {
+				const freshDisk = await readDisk();
+				if (
+					freshDisk &&
+					(!disk || !settingsValuesEqual(freshDisk, disk))
+				) {
+					log.logMessage(
+						"[Settings] data.json changed again before save; re-merging with the fresher on-disk snapshot.",
+					);
+					disk = freshDisk;
+					plan = buildPlan(disk);
+					applyStoreReplace(plan);
+				}
+			}
+
+			// Fold any last-moment store drift onto the planned write, using the
+			// plan's local snapshot as the 3-way base so disk-only fields survive.
+			const storeAtFinalMerge = deepClone(this.settings);
+			let toWrite = plan.toWrite;
+			if (!settingsValuesEqual(storeAtFinalMerge, plan.local)) {
+				toWrite = threeWayMergeSettings(
+					plan.local,
+					storeAtFinalMerge,
+					plan.toWrite,
+				);
+			}
+
+			// Keep the live store aligned with what we persist. Otherwise disk-only
+			// fields preserved in toWrite stay missing from this.settings, and the
+			// next save treats that gap as a local deletion (CodeRabbit on #1750).
+			if (
+				shouldApplyPersistedWriteToStore(
+					toWrite,
+					this.settings,
+					storeAtFinalMerge,
+				)
+			) {
+				this.suppressSettingsSave = true;
+				try {
+					settingsStore.replaceState(toWrite);
+					this.settings = toWrite;
+				} finally {
+					this.suppressSettingsSave = false;
+				}
+			}
+
+			await this.saveData(toWrite);
+			this.lastPersistedSettings = deepClone(toWrite);
+		};
+
+		this.persistChain = this.persistChain.then(run, run);
+		return this.persistChain;
 	}
 
 	private addCommandsForChoices(choices: IChoice[]) {
@@ -572,29 +754,52 @@ export default class QuickAdd extends Plugin {
 			const choiceId = choice.id;
 
 			this.addCommand({
-				id: `choice:${choiceId}`,
+				id: choiceCommandId(choiceId),
 				name: choice.name,
 				icon: resolveChoiceIcon(choice),
-				callback: async () => {
-					// Resolved outside the try so the failure can name the choice the user
-					// actually ran; a bare UUID tells them nothing. Falls back to the name
-					// captured at registration when the lookup itself is what failed.
-					let current: IChoice | undefined;
-					try {
-						current = this.getChoiceById(choiceId);
-						await new ChoiceExecutor(this.app, this).execute(current);
-					} catch (err) {
-						// The outermost handler: the last chance to say which choice failed.
-						// It reports only what nothing below it already reported (#1601), and
-						// stays silent when the user simply dismissed a prompt - Escape on the
-						// one-page input modal used to raise a 15-second ERROR notice here.
-						reportUnlessCancelled(
-							err,
-							`Could not run "${current?.name ?? choice.name}"`,
-						);
-					}
-				},
+				callback: () => this.runRegisteredChoice(choiceId, choice.name),
 			});
+
+			if (
+				shouldRegisterPickDayCommand({
+					origin: choice.dateOrigin,
+					enabled: choice.pickDayCommand,
+				})
+			) {
+				this.addCommand({
+					id: pickDayCommandId(choiceId),
+					name: pickDayCommandName(choice.name),
+					icon: resolveChoiceIcon(choice),
+					callback: () =>
+						this.runRegisteredChoice(choiceId, choice.name, true),
+				});
+			}
+		}
+	}
+
+	private async runRegisteredChoice(
+		choiceId: string,
+		fallbackName: string,
+		pickDate = false,
+	): Promise<void> {
+		// Resolved outside the try so the failure can name the choice the user
+		// actually ran; a bare UUID tells them nothing. Falls back to the name
+		// captured at registration when the lookup itself is what failed.
+		let current: IChoice | undefined;
+		try {
+			current = this.getChoiceById(choiceId);
+			const executor = new ChoiceExecutor(this.app, this);
+			executor.pickDate = pickDate;
+			await executor.execute(current);
+		} catch (err) {
+			// The outermost handler: the last chance to say which choice failed.
+			// It reports only what nothing below it already reported (#1601), and
+			// stays silent when the user simply dismissed a prompt - Escape on the
+			// one-page input modal used to raise a 15-second ERROR notice here.
+			reportUnlessCancelled(
+				err,
+				`Could not run "${current?.name ?? fallbackName}"`,
+			);
 		}
 	}
 
@@ -691,7 +896,11 @@ export default class QuickAdd extends Plugin {
 			}
 		}
 
-		deleteObsidianCommand(this.app, `quickadd:choice:${choice.id}`);
+		deleteObsidianCommand(this.app, `quickadd:${choiceCommandId(choice.id)}`);
+		deleteObsidianCommand(
+			this.app,
+			`quickadd:${pickDayCommandId(choice.id)}`,
+		);
 	}
 
 	public getTemplateFiles(): TFile[] {

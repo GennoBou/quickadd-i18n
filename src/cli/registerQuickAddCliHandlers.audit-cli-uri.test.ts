@@ -1,3 +1,4 @@
+import { createChoiceExecutor } from "../../tests/helpers/createChoiceExecutor";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliData, CliFlags } from "obsidian";
 import { TFile } from "obsidian";
@@ -10,10 +11,12 @@ const {
 	ChoiceExecutorMock,
 	collectChoiceRequirementsMock,
 	getUnresolvedRequirementsMock,
+	listDeferredMacroStepsMock,
 } = vi.hoisted(() => ({
 	ChoiceExecutorMock: vi.fn(),
 	collectChoiceRequirementsMock: vi.fn(),
 	getUnresolvedRequirementsMock: vi.fn(),
+	listDeferredMacroStepsMock: vi.fn((): Array<{ label: string; reason: string }> => []),
 }));
 
 vi.mock("../choiceExecutor", () => ({
@@ -23,6 +26,7 @@ vi.mock("../choiceExecutor", () => ({
 vi.mock("../preflight/collectChoiceRequirements", () => ({
 	collectChoiceRequirements: collectChoiceRequirementsMock,
 	getUnresolvedRequirements: getUnresolvedRequirementsMock,
+	listDeferredMacroSteps: listDeferredMacroStepsMock,
 }));
 
 interface RegisteredCliHandler {
@@ -83,9 +87,12 @@ describe("registerQuickAddCliHandlers (cli-uri audit: cli-run-choice honesty)", 
 		ChoiceExecutorMock.mockReset();
 		collectChoiceRequirementsMock.mockReset();
 		getUnresolvedRequirementsMock.mockReset();
+		listDeferredMacroStepsMock.mockReset();
+		listDeferredMacroStepsMock.mockReturnValue([]);
 
 		ChoiceExecutorMock.mockImplementation(function ChoiceExecutorMock() {
 			const executor: IChoiceExecutor = {
+				...createChoiceExecutor(),
 				execute: vi.fn().mockResolvedValue(undefined),
 				executeWithOutcome: vi.fn().mockResolvedValue({
 					status: "success",

@@ -1,3 +1,4 @@
+import { createChoiceExecutor } from "../../../tests/helpers/createChoiceExecutor";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, Notice } from "obsidian";
 
@@ -111,6 +112,7 @@ describe("ChoiceSuggester", () => {
 		plugin = { app } as unknown as QuickAdd;
 		executed = [];
 		executor = {
+			...createChoiceExecutor(),
 			execute: (c: IChoice) => {
 				executed.push(c);
 				return Promise.resolve();
@@ -1024,6 +1026,16 @@ describe("ChoiceSuggester", () => {
 			await flushMicrotasks();
 			expect(completion).toHaveBeenCalledTimes(1);
 			expect(completion).toHaveBeenCalledWith();
+		});
+
+		it("holds Shift to pick a day on a Today choice", () => {
+			const suggester = makeSuggester(rootChoices);
+			suggester.onChooseItem(
+				topNote,
+				new MouseEvent("click", { shiftKey: true }),
+			);
+			expect(executor.pickDate).toBe(true);
+			expect(executed).toEqual([topNote]);
 		});
 
 		it("rejects with the leaf's own error instance", async () => {

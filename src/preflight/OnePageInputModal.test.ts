@@ -4,11 +4,14 @@ import type { FieldRequirement } from "./RequirementCollector";
 import { OnePageInputModal } from "./OnePageInputModal";
 import { UserCancelError } from "../errors/UserCancelError";
 import { buildValueVariableKey } from "src/utils/valueSyntax";
+import { TemplateChoice } from "src/types/choices/TemplateChoice";
+import type { TemplateNoteSelection } from "src/utils/templateNoteDiscovery";
 
 const { attachImagePasteHandlerMock } = vi.hoisted(() => ({
 	attachImagePasteHandlerMock: vi.fn(() => ({
 		isBusy: (): boolean => false,
 		whenIdle: () => Promise.resolve(),
+		ingestFiles: async () => "",
 		detach: vi.fn(),
 	})),
 }));
@@ -25,8 +28,48 @@ const { filePickerSuggesters } = vi.hoisted(() => ({
 	}>,
 }));
 
+const { noteSelections, noteSuggesterSetup } = vi.hoisted(() => ({
+	noteSuggesterSetup: vi.fn(),
+	noteSelections: [] as Array<(selection: TemplateNoteSelection) => void>,
+}));
+
+vi.mock("src/gui/suggesters/NoteDiscoveryInputSuggest", () => ({
+	NoteDiscoveryInputSuggest: class {
+		constructor(_app: App, _input: HTMLInputElement, _choice: unknown, onSelect: (selection: TemplateNoteSelection) => void) {
+			noteSuggesterSetup();
+			noteSelections.push(onSelect);
+		}
+		resolveInput(title: string): TemplateNoteSelection { return { kind: "create", title }; }
+		close() {}
+		destroy() {}
+	},
+}));
+
 vi.mock("src/gui/imagePasteHandler", () => ({
 	attachImagePasteHandler: attachImagePasteHandlerMock,
+}));
+
+vi.mock("src/gui/suggesters/fileSuggester", () => ({
+	FileSuggester: class {
+		close = vi.fn();
+		destroy = vi.fn();
+	},
+}));
+
+vi.mock("src/gui/suggesters/tagSuggester", () => ({
+	TagSuggester: class {
+		close = vi.fn();
+		destroy = vi.fn();
+	},
+}));
+
+vi.mock("src/gui/promptPeek/stylePeekButton", () => ({
+	applyCompactPromptChrome: vi.fn(),
+	stylePeekButton: <T extends { buttonEl: HTMLButtonElement }>(button: T): T => {
+		button.buttonEl.textContent = "Peek at note";
+		button.buttonEl.classList.add("qa-peek-button");
+		return button;
+	},
 }));
 
 vi.mock("obsidian", () => {
@@ -161,8 +204,10 @@ vi.mock("obsidian", () => {
 		constructor(containerEl: HTMLElement) {
 			const settingEl = document.createElement("div");
 			this.settingEl = settingEl;
+			settingEl.classList.add("setting-item");
 			this.infoEl = document.createElement("div");
 			this.nameEl = document.createElement("div");
+			this.nameEl.classList.add("setting-item-name");
 			this.descEl = document.createElement("div");
 			this.controlEl = document.createElement("div");
 			settingEl.appendChild(this.infoEl);
@@ -193,8 +238,10 @@ vi.mock("obsidian", () => {
 	}
 
 	return {
+		ButtonComponent,
 		DropdownComponent,
 		Modal,
+		Notice: class { constructor(_message: string) {} },
 		Setting,
 		TextAreaComponent,
 		TextComponent,
@@ -203,7 +250,7 @@ vi.mock("obsidian", () => {
 });
 
 vi.mock("src/gui/date-picker/datePicker", () => ({
-	createDatePicker: () => ({ setSelectedIso: vi.fn() }),
+	createDatePicker: () => ({ setSelectedIso: vi.fn(), destroy: vi.fn() }),
 }));
 
 const { fieldSuggestConstructorArgs } = vi.hoisted(() => ({
@@ -212,6 +259,8 @@ const { fieldSuggestConstructorArgs } = vi.hoisted(() => ({
 
 vi.mock("src/gui/suggesters/FieldValueInputSuggest", () => ({
 	FieldValueInputSuggest: class {
+		close = vi.fn();
+		destroy = vi.fn();
 		constructor(...args: unknown[]) {
 			fieldSuggestConstructorArgs.push(args);
 		}
@@ -219,11 +268,12 @@ vi.mock("src/gui/suggesters/FieldValueInputSuggest", () => ({
 }));
 
 vi.mock("src/gui/suggesters/SuggesterInputSuggest", () => ({
-	SuggesterInputSuggest: class {},
+	SuggesterInputSuggest: class { close = vi.fn(); destroy = vi.fn(); },
 }));
 
 vi.mock("src/gui/suggesters/FilePickerInputSuggest", () => ({
 	FilePickerInputSuggest: class {
+		close = vi.fn();
 		destroy = vi.fn();
 
 		constructor(
@@ -299,10 +349,316 @@ function ensureObsidianDomPolyfills(): void {
 	};
 }
 
+function discoveryModal(create: FieldRequirement, existing: FieldRequirement) {
+	return new OnePageInputModal({} as App, [
+		{ id: "note", label: "Note", type: "text" }, create,
+	], undefined, undefined, {
+		notes: [{ id: "note", choice: new TemplateChoice("Project"), group: { id: "project", label: "Project" } }],
+		visibleForNotes: new Map([[create.id, [{ noteId: "note", includeExisting: true }]]]),
+		fieldUsages: new Map([[create.id, [{ kind: "note", noteId: "note", create, existing }]]]),
+	});
+}
+
 describe("OnePageInputModal", () => {
 	beforeEach(() => {
 		ensureObsidianDomPolyfills();
 		filePickerSuggesters.length = 0;
+		noteSelections.length = 0;
+		noteSuggesterSetup.mockReset();
+		attachImagePasteHandlerMock.mockClear();
+	});
+
+	it("keeps each control's default and draft when switching between dropdown and text", async () => {
+		const modal = discoveryModal(
+			{ id: "detail", label: "Folder", type: "dropdown", options: ["a", "b"], defaultValue: "b" },
+			{ id: "detail", label: "Description", type: "text", defaultValue: "Body default", placeholder: "Describe it" },
+		);
+		noteSelections[0]({ kind: "existing", path: "Atlas.md" });
+		const input = modal.contentEl.querySelector<HTMLInputElement>('input[placeholder="Describe it"]')!;
+		expect(input.value).toBe("Body default");
+		input.value = "Free text draft";
+		input.dispatchEvent(new Event("input"));
+		noteSelections[0]({ kind: "create", title: "New project" });
+		const dropdown = modal.contentEl.querySelector("select")!;
+		expect(dropdown.value).toBe("b");
+		dropdown.value = "a";
+		dropdown.dispatchEvent(new Event("change"));
+		noteSelections[0]({ kind: "existing", path: "Atlas.md" });
+		expect(modal.contentEl.querySelector('input[placeholder="Describe it"]')).toBe(input);
+		expect(input.value).toBe("Free text draft");
+		noteSelections[0]({ kind: "create", title: "New project" });
+		expect(modal.contentEl.querySelector("select")).toBe(dropdown);
+		expect(dropdown.value).toBe("a");
+		noteSelections[0]({ kind: "existing", path: "Atlas.md" });
+		Array.from(modal.contentEl.querySelectorAll("button")).find(button => button.textContent === "Submit")!.click();
+		await expect(modal.waitForClose).resolves.toEqual({ detail: "Free text draft" });
+	});
+
+	it("changes same-type options and retains an explicitly blank optional dropdown", () => {
+		const modal = discoveryModal(
+			{ id: "detail", label: "Detail", type: "dropdown", options: ["a", "b"], optional: true },
+			{ id: "detail", label: "Detail", type: "dropdown", options: ["x", "y"], displayOptions: ["X label", "Y label"], defaultValue: "y" },
+		);
+		noteSelections[0]({ kind: "create", title: "New" });
+		const create = modal.contentEl.querySelector("select")!;
+		create.value = "";
+		create.dispatchEvent(new Event("change"));
+		noteSelections[0]({ kind: "existing", path: "Atlas.md" });
+		const existing = modal.contentEl.querySelector("select")!;
+		expect(existing.value).toBe("y");
+		expect(Array.from(existing.options, option => option.textContent)).toEqual(["X label", "Y label"]);
+		noteSelections[0]({ kind: "create", title: "New" });
+		expect(modal.contentEl.querySelector("select")!.value).toBe("");
+	});
+
+	it("retains invalid date text without blocking a different active text control", async () => {
+		const modal = discoveryModal(
+			{ id: "detail", label: "Date", type: "date" },
+			{ id: "detail", label: "Description", type: "text", placeholder: "Body" },
+		);
+		noteSelections[0]({ kind: "create", title: "New" });
+		const date = modal.contentEl.querySelector<HTMLInputElement>(".qa-date-input input")!;
+		date.value = "not-a-valid-date";
+		date.dispatchEvent(new Event("input"));
+		noteSelections[0]({ kind: "existing", path: "Atlas.md" });
+		const text = modal.contentEl.querySelector<HTMLInputElement>('input[placeholder="Body"]')!;
+		text.value = "No date needed";
+		text.dispatchEvent(new Event("input"));
+		noteSelections[0]({ kind: "create", title: "New" });
+		expect(modal.contentEl.querySelector(".qa-date-input input")).toBe(date);
+		expect(date.value).toBe("not-a-valid-date");
+		noteSelections[0]({ kind: "existing", path: "Atlas.md" });
+		Array.from(modal.contentEl.querySelectorAll("button")).find(button => button.textContent === "Submit")!.click();
+		await expect(modal.waitForClose).resolves.toEqual({ detail: "No date needed" });
+	});
+
+	it("keeps structured file picks with commas in their names in their own control", () => {
+		const modal = discoveryModal(
+			{ id: "detail", label: "People", type: "file-picker", options: ["@file:People/Doe, Jane.md"], displayOptions: ["Doe, Jane"], suggesterConfig: { multiSelect: true, allowCustomInput: true } },
+			{ id: "detail", label: "Description", type: "text" },
+		);
+		noteSelections[0]({ kind: "create", title: "New" });
+		filePickerSuggesters[0].onSelect({ value: "@file:People/Doe, Jane.md", label: "Doe, Jane", path: "People/Doe, Jane.md" });
+		noteSelections[0]({ kind: "existing", path: "Atlas.md" });
+		expect(modal.fileSelections.has("detail")).toBe(false);
+		noteSelections[0]({ kind: "create", title: "New" });
+		expect(modal.fileSelections.get("detail")).toEqual(["@file:People/Doe, Jane.md"]);
+		expect(Array.from(modal.contentEl.querySelectorAll(".qa-onepage-file-picker__chip-label"), el => el.textContent)).toContain("Doe, Jane");
+	});
+
+	it("reveals a renderable control after an inactive runtime-only definition", async () => {
+		const modal = discoveryModal(
+			{ id: "detail", label: "Detail", type: "text", runtimeOnly: true },
+			{ id: "detail", label: "Detail", type: "text", defaultValue: "Existing body" },
+		);
+		noteSelections[0]({ kind: "create", title: "New" });
+		expect(modal.activeRequirements.some(req => req.id === "detail")).toBe(false);
+		noteSelections[0]({ kind: "existing", path: "Atlas.md" });
+		expect(modal.activeRequirements.find(req => req.id === "detail")?.defaultValue).toBe("Existing body");
+		Array.from(modal.contentEl.querySelectorAll("button")).find(button => button.textContent === "Submit")!.click();
+		await expect(modal.waitForClose).resolves.toEqual({ detail: "Existing body" });
+	});
+
+	it("retains create-only drafts while changing notes and omits them when opening an existing note", async () => {
+		const requirements: FieldRequirement[] = [
+			{ id: "note", label: "Note", type: "text" },
+			{ id: "owner", label: "Owner", type: "text" },
+			{ id: "update", label: "Update", type: "textarea" },
+		];
+		const modal = new OnePageInputModal({} as App, requirements, undefined, undefined, {
+			notes: [{ id: "note", choice: new TemplateChoice("Project"), group: { id: "project", label: "Project" } }],
+			fieldUsages: new Map(),
+			visibleForNotes: new Map([["owner", [{ noteId: "note", includeExisting: false }]]]),
+		});
+		const owner = modal.contentEl.querySelectorAll<HTMLInputElement>("input")[1];
+		const ownerRow = owner.closest<HTMLElement>(".setting-item")!;
+		expect(ownerRow.hidden).toBe(true);
+		noteSelections[0]({ kind: "create", title: "New project" });
+		expect(ownerRow.hidden).toBe(false);
+		owner.value = "Ada";
+		owner.dispatchEvent(new Event("input"));
+		noteSelections[0]({ kind: "existing", path: "Atlas.md" });
+		expect(ownerRow.hidden).toBe(true);
+		noteSelections[0]({ kind: "create", title: "New project" });
+		expect(owner.value).toBe("Ada");
+		noteSelections[0]({ kind: "existing", path: "Atlas.md" });
+		const update = modal.contentEl.querySelector("textarea")!;
+		update.value = "Ship Friday";
+		update.dispatchEvent(new Event("input"));
+		Array.from(modal.contentEl.querySelectorAll("button")).find((button) => button.textContent === "Submit")!.click();
+		await expect(modal.waitForClose).resolves.toEqual({ update: "Ship Friday" });
+		expect(modal.discoverySelections.get("note")).toEqual({ kind: "existing", path: "Atlas.md" });
+	});
+
+	it("updates optional input and image-paste behavior when choosing an existing note", async () => {
+		const choice = new TemplateChoice("Project");
+		choice.existingNoteAction = "appendBottom";
+		const requirements: FieldRequirement[] = [
+			{ id: "note", label: "Note", type: "text" },
+			{ id: "detail", label: "Detail", type: "text", pathContext: true },
+			{ id: "folder", label: "Folder", type: "text", pathContext: true },
+		];
+		const modal = new OnePageInputModal({} as App, requirements, undefined, undefined, {
+			notes: [{ id: "note", choice, group: { id: "project", label: "Project" } }],
+			visibleForNotes: new Map([
+				["detail", [{ noteId: "note", includeExisting: true }]],
+				["folder", [{ noteId: "note", includeExisting: false }]],
+			]),
+			fieldUsages: new Map([["detail", [{
+				kind: "note", noteId: "note",
+				create: { id: "detail", label: "Detail", type: "text", optional: false, pathContext: true },
+				existing: { id: "detail", label: "Detail", type: "text", optional: true, pathContext: false },
+			}]]]),
+		});
+		const [, detail, folder] = modal.contentEl.querySelectorAll("input");
+		const detailRow = detail.closest<HTMLElement>(".setting-item")!;
+		const folderRow = folder.closest<HTMLElement>(".setting-item")!;
+		noteSelections[0]({ kind: "create", title: "New project" });
+		expect(detailRow.hidden).toBe(false);
+		expect(folderRow.hidden).toBe(false);
+		expect(detailRow.querySelector(".qa-onepage-optional-badge")).toBeNull();
+		expect(attachImagePasteHandlerMock).not.toHaveBeenCalled();
+		detail.value = "Draft description";
+		detail.dispatchEvent(new Event("input"));
+		folder.value = "Archive";
+		folder.dispatchEvent(new Event("input"));
+
+		noteSelections[0]({ kind: "existing", path: "Atlas.md" });
+		expect(detailRow.hidden).toBe(false);
+		expect(folderRow.hidden).toBe(true);
+		expect(detailRow.querySelector(".qa-onepage-optional-badge")).not.toBeNull();
+		expect(detailRow.querySelector("input")).toBe(detail);
+		expect(detail.value).toBe("Draft description");
+		expect(modal.contentEl.textContent).toContain("Append to: Atlas");
+		expect(attachImagePasteHandlerMock).toHaveBeenCalledTimes(1);
+		const pasteHandle = attachImagePasteHandlerMock.mock.results[0].value;
+
+		noteSelections[0]({ kind: "create", title: "New project" });
+		expect(pasteHandle.detach).toHaveBeenCalledTimes(1);
+		expect(detailRow.querySelector(".qa-onepage-optional-badge")).toBeNull();
+		expect(folder.value).toBe("Archive");
+		noteSelections[0]({ kind: "existing", path: "Atlas.md" });
+		detail.value = "";
+		detail.dispatchEvent(new Event("input"));
+		Array.from(modal.contentEl.querySelectorAll("button"))
+			.find((button) => button.textContent === "Submit")!.click();
+		await expect(modal.waitForClose).resolves.toEqual({ detail: "" });
+	});
+
+	it("keeps a shared field visible when any create-note consumer needs it", () => {
+		const requirements: FieldRequirement[] = [
+			{ id: "first", label: "First", type: "text" },
+			{ id: "second", label: "Second", type: "text" },
+			{ id: "owner", label: "Owner", type: "text" },
+		];
+		const modal = new OnePageInputModal({} as App, requirements, undefined, undefined, {
+			notes: ["first", "second"].map((id) => ({ id, choice: new TemplateChoice(id), group: { id, label: id } })),
+			fieldUsages: new Map(),
+			visibleForNotes: new Map([["owner", ["first", "second"].map((noteId) => ({ noteId, includeExisting: false }))]]),
+		});
+		void modal.waitForClose.catch(() => {});
+		const ownerRow = modal.contentEl.querySelectorAll("input")[2].closest<HTMLElement>(".setting-item")!;
+		noteSelections[0]({ kind: "existing", path: "Atlas.md" });
+		noteSelections[1]({ kind: "create", title: "New project" });
+		expect(ownerRow.hidden).toBe(false);
+		noteSelections[1]({ kind: "existing", path: "Other.md" });
+		expect(ownerRow.hidden).toBe(true);
+		modal.onClose();
+	});
+
+	it("accepts a pending new title on submit", async () => {
+		const modal = new OnePageInputModal({} as App, [{ id: "note", label: "Note", type: "text" }], undefined, undefined, {
+			notes: [{ id: "note", choice: new TemplateChoice("Project"), group: { id: "project", label: "Project" } }],
+			fieldUsages: new Map(),
+			visibleForNotes: new Map(),
+		});
+		modal.contentEl.querySelector("input")!.value = "Project At";
+		Array.from(modal.contentEl.querySelectorAll("button")).find((button) => button.textContent === "Submit")!.click();
+		await expect(modal.waitForClose).resolves.toEqual({});
+		expect(modal.discoverySelections.get("note")).toEqual({ kind: "create", title: "Project At" });
+	});
+
+	it("uses the newly revealed definition when submitting a pending title", async () => {
+		const modal = new OnePageInputModal({} as App, [
+			{ id: "note", label: "Note", type: "text" },
+			{ id: "detail", label: "Detail", type: "text", optional: true },
+		], undefined, undefined, {
+			notes: [{ id: "note", choice: new TemplateChoice("Project"), group: { id: "project", label: "Project" } }],
+			visibleForNotes: new Map([["detail", [{ noteId: "note", includeExisting: false }]]]),
+			fieldUsages: new Map([["detail", [{ kind: "note", noteId: "note", create: { id: "detail", label: "Description", type: "textarea" }, existing: null }]]]),
+		});
+		document.body.appendChild(modal.containerEl);
+		modal.contentEl.querySelector("input")!.value = "New project";
+		const submitted = vi.fn();
+		void modal.waitForClose.then(submitted);
+		const submit = Array.from(modal.contentEl.querySelectorAll("button")).find(button => button.textContent === "Submit")!;
+		submit.click();
+		await Promise.resolve();
+		expect(submitted).not.toHaveBeenCalled();
+		const detail = modal.contentEl.querySelector("textarea")!;
+		expect(document.activeElement).toBe(detail);
+		detail.value = "Required description";
+		detail.dispatchEvent(new Event("input"));
+		submit.click();
+		await expect(modal.waitForClose).resolves.toEqual({ detail: "Required description" });
+		modal.containerEl.remove();
+	});
+
+	it("reveals required creation fields before saving a pending new title", async () => {
+		const modal = new OnePageInputModal({} as App, [
+			{ id: "note", label: "Note", type: "text" },
+			{ id: "owner", label: "Owner", type: "text" },
+		], undefined, undefined, {
+			notes: [{ id: "note", choice: new TemplateChoice("Project"), group: { id: "project", label: "Project" } }],
+			fieldUsages: new Map(),
+			visibleForNotes: new Map([["owner", [{ noteId: "note", includeExisting: false }]]]),
+		});
+		document.body.appendChild(modal.containerEl);
+		const [note, owner] = modal.contentEl.querySelectorAll("input");
+		note.value = "Project At";
+		const submitted = vi.fn();
+		void modal.waitForClose.then(submitted);
+		const submit = Array.from(modal.contentEl.querySelectorAll("button")).find((button) => button.textContent === "Submit")!;
+		submit.click();
+		await Promise.resolve();
+		expect(submitted).not.toHaveBeenCalled();
+		expect(owner.closest<HTMLElement>(".setting-item")!.hidden).toBe(false);
+		expect(document.activeElement).toBe(owner);
+		owner.value = "Ada";
+		owner.dispatchEvent(new Event("input"));
+		submit.click();
+		await expect(modal.waitForClose).resolves.toEqual({ owner: "Ada" });
+		modal.containerEl.remove();
+	});
+
+	it("keeps fallback title entry usable when note search cannot be constructed", async () => {
+		noteSuggesterSetup.mockImplementation(() => { throw new Error("Metadata unavailable"); });
+		const modal = new OnePageInputModal({} as App, [{ id: "note", label: "Note", type: "text" }], undefined, undefined, {
+			notes: [{ id: "note", choice: new TemplateChoice("Project"), group: { id: "project", label: "Project" } }],
+			fieldUsages: new Map(),
+			visibleForNotes: new Map(),
+		});
+		const input = modal.contentEl.querySelector("input")!;
+		const submit = Array.from(modal.contentEl.querySelectorAll("button")).find((button) => button.textContent === "Submit")!;
+		input.value = "../outside";
+		submit.click();
+		expect(modal.discoverySelections.size).toBe(0);
+		input.value = "Project At";
+		submit.click();
+		await expect(modal.waitForClose).resolves.toEqual({});
+		expect(modal.discoverySelections.get("note")).toEqual({ kind: "create", title: "Project At" });
+	});
+
+	it.each([false, true])("suppresses matching single-field section headings only in discovery forms: %s", (discovery) => {
+		const requirements: FieldRequirement[] = [
+			{ id: "update", label: "Update", type: "text", group: { id: "update", label: "Update" } },
+			{ id: "meeting", label: "Next meeting", type: "text", group: { id: "meeting", label: "Next meeting" } },
+		];
+		const modal = new OnePageInputModal({} as App, requirements, undefined, undefined,
+			discovery ? { notes: [], visibleForNotes: new Map(), fieldUsages: new Map() } : undefined);
+		void modal.waitForClose.catch(() => {});
+		expect(modal.contentEl.querySelectorAll(".qa-onepage-section")).toHaveLength(discovery ? 0 : 2);
+		modal.onClose();
 	});
 
 	it("submits the first raw mapped dropdown option when untouched", async () => {
@@ -844,6 +1200,34 @@ describe("OnePageInputModal", () => {
 			await expect(modal.waitForClose).resolves.toEqual({ due: "" });
 		});
 
+		it("stacks the date row and keeps the parsed preview next to the input", () => {
+			const requirements: FieldRequirement[] = [
+				{
+					id: "due",
+					label: "due",
+					type: "date",
+					dateFormat: "YYYY-MM-DD",
+				},
+			];
+			const modal = new OnePageInputModal({} as App, requirements, new Map());
+			const contentEl = (modal as any).contentEl as HTMLElement;
+			const row = contentEl.querySelector(".qa-onepage-date-setting");
+			expect(row).not.toBeNull();
+
+			const container = row?.querySelector(".qa-date-input");
+			const children = Array.from(container?.children ?? []);
+			const inputIndex = children.findIndex((el) => el.tagName === "INPUT");
+			const previewIndex = children.findIndex((el) =>
+				el.classList.contains("qa-date-preview-text"),
+			);
+			const pickerIndex = children.findIndex((el) =>
+				el.classList.contains("qa-date-picker-container"),
+			);
+			expect(inputIndex).toBeGreaterThanOrEqual(0);
+			expect(previewIndex).toBe(inputIndex + 1);
+			expect(pickerIndex).toBeGreaterThan(previewIndex);
+		});
+
 		it("omits a required blank date so the sequential prompt still fires", async () => {
 			const requirements: FieldRequirement[] = [
 				{
@@ -932,6 +1316,62 @@ describe("OnePageInputModal", () => {
 	});
 });
 
+describe("OnePageInputModal section headings", () => {
+	beforeEach(() => {
+		ensureObsidianDomPolyfills();
+	});
+
+	function textField(
+		id: string,
+		group?: { id: string; label: string },
+	): FieldRequirement {
+		return { id, label: id, type: "text", group };
+	}
+
+	it("does not render section headings when fields have no group", () => {
+		const modal = new OnePageInputModal(
+			{} as App,
+			[textField("a"), textField("b")],
+		);
+		expect(
+			(modal as any).contentEl.querySelectorAll("h3.qa-onepage-section"),
+		).toHaveLength(0);
+		modal.close();
+	});
+
+	it("does not render section headings when every field shares one group", () => {
+		const group = { id: "cap-1", label: "Capture one" };
+		const modal = new OnePageInputModal(
+			{} as App,
+			[textField("a", group), textField("b", group)],
+		);
+		expect(
+			(modal as any).contentEl.querySelectorAll("h3.qa-onepage-section"),
+		).toHaveLength(0);
+		modal.close();
+	});
+
+	it("renders a heading before each consecutive group when two groups are present", () => {
+		const first = { id: "cap-1", label: "Capture one" };
+		const second = { id: "cap-2", label: "Capture two" };
+		const modal = new OnePageInputModal({} as App, [
+			textField("a", first),
+			textField("b", first),
+			textField("c", second),
+		]);
+		const headings = Array.from(
+			(modal as any).contentEl.querySelectorAll(
+				"h3.qa-onepage-section",
+			) as NodeListOf<HTMLHeadingElement>,
+		);
+		expect(headings.map((heading) => heading.textContent)).toEqual([
+			"Capture one",
+			"Capture two",
+		]);
+		modal.close();
+	});
+});
+
 describe("OnePageInputModal - image paste wiring (issue #1484)", () => {
 	beforeEach(() => {
 		ensureObsidianDomPolyfills();
@@ -981,6 +1421,7 @@ describe("OnePageInputModal - image paste wiring (issue #1484)", () => {
 		attachImagePasteHandlerMock.mockReturnValueOnce({
 			isBusy: () => false,
 			whenIdle: () => Promise.resolve(),
+			ingestFiles: async () => "",
 			detach,
 		});
 		const requirements: FieldRequirement[] = [
@@ -1003,6 +1444,7 @@ describe("OnePageInputModal - image paste wiring (issue #1484)", () => {
 		attachImagePasteHandlerMock.mockReturnValueOnce({
 			isBusy: () => busy,
 			whenIdle: () => idle,
+			ingestFiles: async () => "",
 			detach: vi.fn(),
 		});
 		const requirements: FieldRequirement[] = [

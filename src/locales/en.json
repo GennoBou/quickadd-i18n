@@ -798,5 +798,19 @@
   "Yes": "Yes",
   "You'll pick a heading from the target note when you run this capture, and the text is inserted under it. Use the toggles below to control placement within that section.": "You'll pick a heading from the target note when you run this capture, and the text is inserted under it. Use the toggles below to control placement within that section.",
   "your choices": "your choices",
-  "your global variables": "your global variables"
+  "your global variables": "your global variables",
+  "Show matching notes and unresolved links in the note-title prompt.": "Show matching notes and unresolved links in the note-title prompt.",
+  "If a new note's path already exists": "If a new note's path already exists",
+  "Property": "Property",
+  "Named property": "Named property",
+  "Choose when capturing": "Choose when capturing",
+  "Property name": "Property name",
+  "Property name is required": "Property name is required",
+  "Add captured values to the property's list, keeping existing items and skipping duplicates.": "Add captured values to the property's list, keeping existing items and skipping duplicates.",
+  "Replace the property's value with the captured value.": "Replace the property's value with the captured value.",
+  "Set value": "Set value",
+  "Add to list": "Add to list",
+  "Create property if missing": "Create property if missing",
+  "Name pasted images after the note title": "Name pasted images after the note title",
+  "When on, clipboard images saved by QuickAdd (pasting into a prompt, or {{CLIPBOARD}} with an image and no text) are named after the destination note. When the destination is not yet known, QuickAdd keeps the timestamp name. Duplicate names are handled by Obsidian's attachment folder setting.": "When on, clipboard images saved by QuickAdd (pasting into a prompt, or {{CLIPBOARD}} with an image and no text) are named after the destination note. When the destination is not yet known, QuickAdd keeps the timestamp name. Duplicate names are handled by Obsidian's attachment folder setting."
 }

@@ -1,6 +1,7 @@
 import realMoment from "moment";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Formatter, type PromptContext } from "./formatter";
+import type { RunClocks } from "../types/dateOrigin";
 
 // Integration test for the issue #511 snap wiring THROUGH the formatter passes
 // (not just the regex/unit helpers). Uses real moment + a frozen clock so the
@@ -33,6 +34,9 @@ class TestFormatter extends Formatter {
 	}
 	public seed(name: string, value: unknown) {
 		this.variables.set(name, value);
+	}
+	public seedClocks(clocks: RunClocks) {
+		this.clocks = clocks;
 	}
 	public renderDate(input: string) {
 		return this.replaceDateInString(input);
@@ -109,6 +113,23 @@ describe("{{DATE}} snap through replaceDateInString", () => {
 	it("renders endof:month and offset-then-snap", () => {
 		expect(f.renderDate("{{DATE:YYYY-MM-DD|endof:month}}")).toBe("2023-06-30");
 		expect(f.renderDate("{{DATE:YYYY-MM-DD+7|startof:week}}")).toBe("2023-06-04");
+	});
+
+	it("renders the documented +N day offsets from issue #1704", () => {
+		expect(f.renderDate("{{DATE}}")).toBe("2023-06-01");
+		expect(f.renderDate("{{DATE:YYYY-MM-DD}}")).toBe("2023-06-01");
+		expect(f.renderDate("{{DATE+3}}")).toBe("2023-06-04");
+		expect(f.renderDate("{{DATE:YYYY-MM-DD+3}}")).toBe("2023-06-04");
+		expect(f.renderDate("{{DATE+-3}}")).toBe("2023-05-29");
+		// DATE_REGEX is case-insensitive; lowercase must not fall through to
+		// Moment as a format suffix (the 2026-08-26+3 concatenation symptom).
+		expect(f.renderDate("{{date+3}}")).toBe("2023-06-04");
+		expect(f.renderDate("{{date:YYYY-MM-DD+3}}")).toBe("2023-06-04");
+		expect(
+			f.renderDate(
+				"# works\n{{DATE:YYYY-MM-DD}}\n\n{{DATE}}\n\n# buggy\n{{DATE:YYYY-MM-DD+3}}\n\n{{DATE+3}}\n",
+			),
+		).toBe("# works\n2023-06-01\n\n2023-06-01\n\n# buggy\n2023-06-04\n\n2023-06-04\n");
 	});
 
 	it("keeps a literal pipe byte-identical and a [literal |startof: x] intact", () => {
@@ -190,5 +211,21 @@ describe("date and time case transforms", () => {
 		expect(f.warnings).toEqual([
 			'QuickAdd: Unsupported |case style "lowre" in token "{{DATE:MMMM|case:lowre}}". Supported styles: kebab, snake, camel, pascal, title, lower, upper, slug.',
 		]);
+	});
+});
+
+describe("{{DATE}} run origin through replaceDateInString", () => {
+	it("formats and offsets from the origin day and keeps TIME on now", () => {
+		const f = new TestFormatter();
+		f.seedClocks({
+			now: new Date("2023-06-01T12:00:00"),
+			date: new Date(2023, 4, 26),
+		});
+		expect(f.renderDate("{{DATE:YYYY-MM-DD}}")).toBe("2023-05-26");
+		expect(f.renderDate("{{DATE+1}}")).toBe("2023-05-27");
+		expect(f.renderDate("{{DATE:YYYY-MM-DD|startof:week}}")).toBe("2023-05-21");
+		expect(f.renderDate("{{DATE:YYYY-MM-DD HH:mm}}")).toBe("2023-05-26 12:00");
+		expect(f.renderTime("{{TIME}}")).toBe("12:00");
+		expect(f.renderDate("{{DATE:HH:mm}}")).toBe("12:00");
 	});
 });
