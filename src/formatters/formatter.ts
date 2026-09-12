@@ -35,6 +35,7 @@ import {
 	type PromptScopeKind,
 } from "./promptScope";
 import { getDate } from "../utilityObsidian";
+import type { RunClocks } from "../types/dateOrigin";
 import type { IDateParser } from "../parsers/IDateParser";
 import { log } from "../logger/logManager";
 import { TemplatePropertyCollector } from "../utils/TemplatePropertyCollector";
@@ -323,10 +324,54 @@ export abstract class Formatter {
 	protected promptScopeSoleValue = false;
 	/** Which choice is asking and, once known, where the answer lands. */
 	protected promptRunContext?: PromptRunContext;
+	protected clocks?: RunClocks;
+
+	protected runClocks(): RunClocks | undefined {
+		return this.clocks;
+	}
 
 	// Tracks variables collected for YAML property post-processing
 	private readonly propertyCollector: TemplatePropertyCollector;
 	private templatePropertyCollectionDepth = 0;
+	private singleTokenValue?: { input: string; result?: { value: unknown } };
+
+	protected async preserveSingleTokenValue(input: string, work: () => Promise<string>): Promise<unknown> {
+		const previous = this.singleTokenValue;
+		const capture: typeof this.singleTokenValue = /^(?:\{\{(?:VALUE|NAME)(?::[^{}]+|\|[^{}]+)?\}\}|\{\{(?:FIELD|FILE):[^{}]+\}\})$/i.test(input)
+			? { input }
+			: undefined;
+		this.singleTokenValue = capture;
+		try {
+			const text = await work();
+			return capture?.result && typeof capture.result.value !== "string" ? capture.result.value : text;
+		} finally {
+			this.singleTokenValue = previous;
+		}
+	}
+
+	private retainSingleTokenValue(input: string, start: number, end: number, value: unknown): void {
+		if (this.singleTokenValue?.input === input && start === 0 && end === input.length) {
+			this.singleTokenValue.result = { value };
+		}
+	}
+
+	private propertyTokenValue(value: unknown, inputType?: string): unknown {
+		if (inputType === "text") return formatUnknownValue(value);
+		if (inputType === "checkbox") {
+			if (typeof value === "boolean") return value;
+			if (value === "true") return true;
+			if (value === "false") return false;
+			throw new Error("A checkbox property value must be true or false.");
+		}
+		if (inputType === "number" || inputType === "slider") {
+			if (typeof value === "number" && Number.isFinite(value)) return value;
+			if (typeof value !== "string" || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value.trim()) || !Number.isFinite(Number(value))) {
+				throw new Error("A number property value must be a finite number.");
+			}
+			return Number(value);
+		}
+		return value;
+	}
 
 	// Detects the same |name being defined with conflicting option lists across
 	// one execution (filename + body share this instance). Keyed name -> option
@@ -474,7 +519,13 @@ export abstract class Formatter {
 			const snap = dateMatch?.[2]
 				? parseDateSnapSegment(dateMatch[2]) ?? undefined
 				: undefined;
-			const rendered = getDate({ offset, snap });
+			const clocks = this.runClocks();
+			const rendered = getDate({
+				offset,
+				snap,
+				origin: clocks?.date,
+				now: clocks?.now,
+			});
 			output = this.replacer(
 				output,
 				DATE_REGEX,
@@ -499,7 +550,14 @@ export abstract class Formatter {
 				? parseDateSnapSegment(dateMatch[3]) ?? undefined
 				: undefined;
 
-			const rendered = getDate({ format, offset, snap });
+			const clocks = this.runClocks();
+			const rendered = getDate({
+				format,
+				offset,
+				snap,
+				origin: clocks?.date,
+				now: clocks?.now,
+			});
 			output = this.replacer(
 				output,
 				DATE_REGEX_FORMATTED,
@@ -517,7 +575,10 @@ export abstract class Formatter {
 			const timeMatch = TIME_REGEX.exec(output);
 			if (!timeMatch) throw new Error(`Unable to parse time format. Invalid syntax in: "${output.substring(Math.max(0, output.search(TIME_REGEX) - 10), Math.min(output.length, output.search(TIME_REGEX) + 30))}..."`);
 
-			const rendered = getDate({ format: "HH:mm" });
+			const rendered = getDate({
+				format: "HH:mm",
+				now: this.runClocks()?.now,
+			});
 			output = this.replacer(
 				output,
 				TIME_REGEX,
@@ -531,7 +592,10 @@ export abstract class Formatter {
 
 			const format = timeMatch[1];
 
-			const rendered = getDate({ format });
+			const rendered = getDate({
+				format,
+				now: this.runClocks()?.now,
+			});
 			output = this.replacer(
 				output,
 				TIME_REGEX_FORMATTED,
@@ -573,6 +637,8 @@ export abstract class Formatter {
 			const inner = token.slice(2, -2);
 			const optionsIndex = inner.indexOf("|");
 			if (optionsIndex === -1) {
+				this.retainSingleTokenValue(source, offset, offset + token.length,
+					this.hasConcreteVariable("value") ? this.variables.get("value") : this.value);
 				return escapeValueInsideQuotedYamlScalar(
 					source,
 					offset,
@@ -593,6 +659,13 @@ export abstract class Formatter {
 					? parsed.defaultValue
 					: this.value;
 			const transformed = this.applyValueTextOptions(effectiveValue, parsed);
+			if (this.singleTokenValue) {
+				const rawValue = this.value === "" && parsed.defaultValue && !parsed.optional
+					? parsed.defaultValue
+					: this.hasConcreteVariable("value") ? this.variables.get("value") : this.value;
+				this.retainSingleTokenValue(source, offset, offset + token.length,
+					this.propertyTokenValue(this.applyValueTokenOptions(rawValue, parsed), parsed.inputTypeOverride));
+			}
 			// |type:text on the anonymous {{VALUE|...}} form quotes the same way
 			// as the named form (see replaceVariableInString).
 			if (
@@ -626,7 +699,7 @@ export abstract class Formatter {
 
 	private applyValueTokenOptions(
 		value: unknown,
-		parsed: ParsedValueToken,
+		parsed: Pick<ParsedValueToken, "trim" | "caseStyle">,
 	): unknown {
 		if (Array.isArray(value)) {
 			return parsed.trim
@@ -1045,6 +1118,9 @@ export abstract class Formatter {
 		heuristicEnabled: boolean;
 		multiFormat?: MultiValueFormat;
 	}): string | undefined {
+		if (!args.multiFormat || args.multiFormat === "auto") {
+			this.retainSingleTokenValue(args.input, args.matchStart, args.matchEnd, args.rawValue);
+		}
 		if (Array.isArray(args.rawValue) && args.multiFormat) {
 			const explicit = renderExplicitMultiValue({
 				input: args.input,
@@ -1334,6 +1410,10 @@ export abstract class Formatter {
 			// Get the raw value from variables
 			const rawValue = this.variables.get(effectiveKey);
 			const effectiveRawValue = this.applyValueTokenOptions(rawValue, parsed);
+			if (this.singleTokenValue && (!parsed.multiFormat || parsed.multiFormat === "auto")) {
+				this.retainSingleTokenValue(output, match.index, match.index + match[0].length,
+					this.propertyTokenValue(effectiveRawValue, parsed.inputTypeOverride));
+			}
 
 			// Offer this variable to the property collector for YAML post-processing.
 			// Collecting structured values (arrays/objects/numbers/booleans) into a
@@ -1344,7 +1424,7 @@ export abstract class Formatter {
 				input: output,
 				matchStart: match.index,
 				matchEnd: match.index + match[0].length,
-				rawValue: effectiveRawValue,
+				rawValue: this.singleTokenValue?.result ? this.singleTokenValue.result.value : effectiveRawValue,
 				fallbackKey: variableName,
 				// |type:text forces a string: never run the string->structured
 				// heuristic on it, or a comma/bracket value (`a,b`, `[x]`) would be
@@ -1458,6 +1538,9 @@ export abstract class Formatter {
 				const rawValue = this.hasConcreteVariable(fieldVariableKey)
 					? this.variables.get(fieldVariableKey)
 					: this.getVariableValue(fieldVariableKey);
+				if (!parsed.multiFormat || parsed.multiFormat === "auto") {
+					this.retainSingleTokenValue(input, match.index, match.index + match[0].length, rawValue);
+				}
 				let replacement: string;
 
 				if (Array.isArray(rawValue)) {

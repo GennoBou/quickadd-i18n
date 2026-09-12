@@ -1,3 +1,4 @@
+import { createChoiceExecutor } from "../../tests/helpers/createChoiceExecutor";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliData, CliFlags } from "obsidian";
 import { TFile } from "obsidian";
@@ -11,11 +12,13 @@ const {
 	ChoiceExecutorMock,
 	collectChoiceRequirementsMock,
 	getUnresolvedRequirementsMock,
+	listDeferredMacroStepsMock,
 	interactiveServerMock,
 } = vi.hoisted(() => ({
 	ChoiceExecutorMock: vi.fn(),
 	collectChoiceRequirementsMock: vi.fn(),
 	getUnresolvedRequirementsMock: vi.fn(),
+	listDeferredMacroStepsMock: vi.fn((): Array<{ label: string; reason: string }> => []),
 	// Stubbed so driving quickadd:interactive does not really bind a loopback port
 	// (and leave watchdog timers behind) just to read the terminal event.
 	interactiveServerMock: {
@@ -36,6 +39,7 @@ vi.mock("../choiceExecutor", () => ({
 vi.mock("../preflight/collectChoiceRequirements", () => ({
 	collectChoiceRequirements: collectChoiceRequirementsMock,
 	getUnresolvedRequirements: getUnresolvedRequirementsMock,
+	listDeferredMacroSteps: listDeferredMacroStepsMock,
 }));
 
 interface RegisteredCliHandler {
@@ -145,9 +149,12 @@ describe("registerQuickAddCliHandlers", () => {
 		ChoiceExecutorMock.mockReset();
 		collectChoiceRequirementsMock.mockReset();
 		getUnresolvedRequirementsMock.mockReset();
+		listDeferredMacroStepsMock.mockReset();
+		listDeferredMacroStepsMock.mockReturnValue([]);
 
 		ChoiceExecutorMock.mockImplementation(function ChoiceExecutorMock() {
 			const executor: IChoiceExecutor = {
+				...createChoiceExecutor(),
 				execute: vi.fn().mockResolvedValue(undefined),
 				executeWithOutcome: vi.fn().mockResolvedValue({
 					status: "success",
@@ -192,6 +199,7 @@ describe("registerQuickAddCliHandlers", () => {
 			"quickadd:check",
 			"quickadd:package-preview",
 			"quickadd:interactive",
+			"quickadd:save-clipboard-image",
 		]);
 	});
 
@@ -407,6 +415,7 @@ describe("registerQuickAddCliHandlers", () => {
 		);
 		ChoiceExecutorMock.mockImplementationOnce(function () {
 			const executor: IChoiceExecutor = {
+				...createChoiceExecutor(),
 				execute: vi.fn().mockResolvedValue(undefined),
 				executeWithOutcome: vi.fn().mockResolvedValue({
 					status: "error",
@@ -446,6 +455,7 @@ describe("registerQuickAddCliHandlers", () => {
 		);
 		ChoiceExecutorMock.mockImplementationOnce(function () {
 			const executor: IChoiceExecutor = {
+				...createChoiceExecutor(),
 				execute: vi.fn().mockResolvedValue(undefined),
 				executeWithOutcome: vi.fn().mockResolvedValue({ status: "error" }),
 				variables: new Map<string, unknown>(),
@@ -471,6 +481,7 @@ describe("registerQuickAddCliHandlers", () => {
 		const run = handlers.find((h) => h.command === "quickadd:run-template");
 		ChoiceExecutorMock.mockImplementationOnce(function () {
 			const executor: IChoiceExecutor = {
+				...createChoiceExecutor(),
 				execute: vi.fn().mockResolvedValue(undefined),
 				executeWithOutcome: vi.fn().mockResolvedValue({
 					status: "error",
@@ -505,6 +516,7 @@ describe("registerQuickAddCliHandlers", () => {
 		// ui=true + blank-name path that the up-front guard intentionally skips.
 		ChoiceExecutorMock.mockImplementationOnce(function () {
 			const executor: IChoiceExecutor = {
+				...createChoiceExecutor(),
 				execute: vi.fn().mockResolvedValue(undefined),
 				executeWithOutcome: vi.fn().mockResolvedValue({ status: "error" }),
 				variables: new Map<string, unknown>(),
@@ -534,6 +546,7 @@ describe("registerQuickAddCliHandlers", () => {
 		const run = handlers.find((h) => h.command === "quickadd:run-template");
 		ChoiceExecutorMock.mockImplementationOnce(function () {
 			const executor: IChoiceExecutor = {
+				...createChoiceExecutor(),
 				execute: vi.fn().mockResolvedValue(undefined),
 				executeWithOutcome: vi
 					.fn()
@@ -777,6 +790,46 @@ describe("registerQuickAddCliHandlers", () => {
 		expect(payload.requiredInputCount).toBe(1);
 		expect(payload.missingInputCount).toBe(1);
 		expect(executors[0].execute).not.toHaveBeenCalled();
+	});
+
+	it("includes deferred macro steps in quickadd:check", async () => {
+		const { plugin, handlers } = createPlugin([macroChoice]);
+		registerQuickAddCliHandlers(plugin);
+		const check = handlers.find((handler) => handler.command === "quickadd:check");
+		collectChoiceRequirementsMock.mockResolvedValue([]);
+		getUnresolvedRequirementsMock.mockReturnValue([]);
+		listDeferredMacroStepsMock.mockReturnValue([
+			{ label: "Inner macro", reason: "nestedMacroGroup" },
+		]);
+
+		const payload = JSON.parse(
+			String(
+				await Promise.resolve(
+					check!.handler({
+						choice: macroChoice.name,
+					}),
+				),
+			),
+		);
+
+		expect(payload.deferred).toEqual([
+			{ label: "Inner macro", reason: "nestedMacroGroup" },
+		]);
+		expect(listDeferredMacroStepsMock).toHaveBeenCalledWith(
+			plugin,
+			macroChoice,
+			undefined,
+		);
+	});
+
+	it.each(["Seeded title", ""])("passes the explicit title seed to deferred macro inspection (%j)", async (seed) => {
+		const { plugin, handlers } = createPlugin([macroChoice]);
+		registerQuickAddCliHandlers(plugin);
+		const check = handlers.find((handler) => handler.command === "quickadd:check");
+		collectChoiceRequirementsMock.mockResolvedValue([]);
+		getUnresolvedRequirementsMock.mockReturnValue([]);
+		await check!.handler({ choice: macroChoice.name, "value-value": seed });
+		expect(listDeferredMacroStepsMock).toHaveBeenCalledWith(plugin, macroChoice, seed);
 	});
 
 	it("includes full field metadata in quickadd:check when the fields flag is set", async () => {

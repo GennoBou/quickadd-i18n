@@ -30,7 +30,12 @@ Run a QuickAdd choice from the CLI, by name or by id:
 ```bash
 obsidian vault=dev quickadd choice="Daily log"
 obsidian vault=dev quickadd:run id="choice-id"
+obsidian vault=dev quickadd:run choice="Weekly review" date=lw
 ```
+
+`date=` is the day for `{{DATE}}`. Pass a real day (`2026-08-21`,
+`last friday`, `lw`) and the choice's Which day setting is skipped. Pass
+`ask` to open the date picker instead.
 
 ### List your choices: `quickadd:list` {#quickaddlist}
 
@@ -67,6 +72,19 @@ obsidian vault=dev quickadd:run-template \
 - The picker (interactive command) only lists templates inside your configured template folder(s); `path=` here is explicit, so any vault file resolves.
 - Like `quickadd:run`, name collisions on the target note still prompt (the file-exists choice is not a pre-collected input). Under `quickadd:interactive` that prompt is forwarded to you like any other.
 
+### Save a clipboard image: `quickadd:save-clipboard-image` {#quickaddsave-clipboard-image}
+
+Save a 1x1 PNG through the same path QuickAdd uses when you paste an image into a prompt or when `{{CLIPBOARD}}` falls back to an image. Useful for checking attachment naming without driving a modal.
+
+```bash
+obsidian vault=dev quickadd:save-clipboard-image \
+  sourcePath="Meetings/Meeting notes.md" \
+  nameAfterNoteTitle=true
+```
+
+- `sourcePath=` is the note the attachment belongs to (the capture destination). Empty uses vault-root attachment placement and the timestamp name even when title-naming is on.
+- `nameAfterNoteTitle=` overrides the **Name pasted images after the note title** setting for this save. Omit it to use the setting.
+
 ## Pass variables to a choice {#passing-variables}
 
 QuickAdd's CLI accepts variables three ways:
@@ -90,11 +108,27 @@ Values are passed through exactly as provided. If a choice should ignore an
 accidental leading or trailing space for a specific placeholder, use `|trim` in
 that format string, for example `{{VALUE:project|trim}}`.
 
+For [property captures](/docs/Choices/CaptureChoice/#property), `vars` preserves
+native numbers, checkboxes, and lists when the Capture format is one whole token:
+
+```bash
+obsidian vault=dev quickadd choice="Add project tags" \
+  vars='{"tags":["Research, writing","work"]}' verify=true
+```
+
+`verify=true` includes the engine's [confirmed outcome](#verified-and-effect),
+so automation can distinguish a changed property from an unchanged capture.
+
+For Template choices, passing `value` supplies the new note's name. It does not
+select an existing note from the discovery picker. The generated path follows
+the choice's file-exists behavior. To use **When selecting an existing note**,
+run interactively and select the offered note in the discovery prompt.
+
 ### Names the CLI reserves {#reserved-flag-names}
 
 The bare `key=value` form (pattern 2) ignores names that a command already uses
-as flags or selectors: `choice`, `id`, `vars`, `ui`, `verify` (on `quickadd` /
-`quickadd:run`), `fields` (on `quickadd:check`), and `path` (on
+as flags or selectors: `choice`, `id`, `vars`, `ui`, `verify`, `date` (on
+`quickadd` / `quickadd:run`), `fields` (on `quickadd:check`), and `path` (on
 `quickadd:run-template`). If a choice has a variable named after one of these
 (for example `{{VALUE:verify}}`), pass it with the `value-` prefix or via
 `vars` instead - neither is ever treated as a flag:
@@ -242,4 +276,3 @@ Good to know:
 - **Desktop only.** The bridge binds to `127.0.0.1`, is gated by the per-session `token`, rejects browser (`Origin`/`Referer`) and non-loopback `Host` requests, and the server is ephemeral - it starts on the first session and stops when the last one ends.
 - **Concurrency.** Each run gets its own `sessionId` + `token`; many can run at once without interfering.
 - If no client attaches within ~30s the run is aborted so a prompt can't hang forever.
-

@@ -17,6 +17,8 @@ import AppendLinkSetting from "./components/AppendLinkSetting.svelte";
 import OpenFileSetting from "./components/OpenFileSetting.svelte";
 import FileOpeningSetting from "./components/FileOpeningSetting.svelte";
 import OnePageOverrideSetting from "./components/OnePageOverrideSetting.svelte";
+import DateOriginSetting from "./components/DateOriginSetting.svelte";
+import CommandPaletteSetting from "./components/CommandPaletteSetting.svelte";
 import CaptureTargetSetting from "./components/CaptureTargetSetting.svelte";
 import WritePositionSetting from "./components/WritePositionSetting.svelte";
 import ChoiceIconSetting from "./components/ChoiceIconSetting.svelte";
@@ -148,11 +150,13 @@ function onTemplaterAfterCaptureChange(value: boolean) {
 </SettingItem>
 
 <SettingItem name={t("Content")} heading />
+{#if !choice.propertyCapture}
 <SettingItem name={t("Task")} desc={t("Formats the value as a task.")}>
 	{#snippet control()}
 		<Toggle bind:checked={choice.task} />
 	{/snippet}
 </SettingItem>
+{/if}
 
 <LabeledField
 	name={t("Capture format")}
@@ -198,6 +202,7 @@ function onTemplaterAfterCaptureChange(value: boolean) {
 	{/snippet}
 </SettingItem>
 
+{#if !choice.propertyCapture}
 <SettingItem
 	name={t("Run Templater on entire destination file after capture")}
 	desc={t("Advanced / legacy: this executes any <% %> anywhere in the destination file (including inside code blocks).")}
@@ -209,7 +214,17 @@ function onTemplaterAfterCaptureChange(value: boolean) {
 		/>
 	{/snippet}
 </SettingItem>
+{/if}
+
+<DateOriginSetting bind:dateOrigin={choice.dateOrigin} />
 
 <OnePageOverrideSetting bind:onePageInput={choice.onePageInput} />
+
+<CommandPaletteSetting
+	bind:command={choice.command}
+	bind:pickDayCommand={choice.pickDayCommand}
+	name={choice.name}
+	dateOrigin={choice.dateOrigin}
+/>
 
 <ChoiceIconSetting bind:icon={choice.icon} type={choice.type} {app} />

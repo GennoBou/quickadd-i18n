@@ -8,6 +8,7 @@ import SettingItem from "../../components/SettingItem.svelte";
 import Dropdown from "../../components/Dropdown.svelte";
 import InsertAfterFields from "./InsertAfterFields.svelte";
 import InsertBeforeFields from "./InsertBeforeFields.svelte";
+import PropertyCaptureFields from "./PropertyCaptureFields.svelte";
 import { t } from "src/i18n";
 
 /**
@@ -29,6 +30,7 @@ let {
 const isActiveFile = $derived(!!choice.captureToActiveFile);
 
 const current = $derived.by(() => {
+	if (choice.propertyCapture) return "property";
 	if (choice.insertAfter?.enabled) return "after";
 	if (choice.insertBefore?.enabled) return "before";
 	if (choice.newLineCapture?.enabled)
@@ -56,9 +58,19 @@ const options = $derived([
 	{ value: "after", label: t("After line…") },
 	{ value: "before", label: t("Before line…") },
 	{ value: "bottom", label: t("Bottom of file") },
+	{ value: "property", label: t("Property") },
 ]);
 
 function onWritePositionChange(value: string) {
+	if (value === "property") {
+		choice.propertyCapture ??= {
+			property: { kind: "named", format: "" },
+			action: "set",
+			createIfMissing: true,
+		};
+		return;
+	}
+	delete choice.propertyCapture;
 	// Reset every mutually-exclusive position flag, then set the chosen one
 	// (verbatim order from the imperative builder, captureChoiceBuilder.ts:941-999).
 	choice.prepend = false;
@@ -116,6 +128,7 @@ function onWritePositionChange(value: string) {
 }
 
 const showCanvasNotice = $derived.by(() => {
+	if (choice.propertyCapture) return false;
 	const obviousCanvasTarget =
 		typeof choice.captureTo === "string" && isCanvasTargetPath(choice.captureTo);
 	const hasActiveCanvasView =
@@ -146,11 +159,15 @@ const showCanvasNotice = $derived.by(() => {
 	{/snippet}
 </SettingItem>
 
-{#if choice.insertAfter.enabled}
+{#if choice.propertyCapture}
+	<PropertyCaptureFields bind:config={choice.propertyCapture} {app} {plugin} />
+{/if}
+
+{#if !choice.propertyCapture && choice.insertAfter.enabled}
 	<InsertAfterFields bind:insertAfter={choice.insertAfter} {app} {plugin} />
 {/if}
 
-{#if choice.insertBefore?.enabled}
+{#if !choice.propertyCapture && choice.insertBefore?.enabled}
 	<InsertBeforeFields bind:insertBefore={choice.insertBefore} {app} {plugin} />
 {/if}
 

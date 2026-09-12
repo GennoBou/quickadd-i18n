@@ -5,6 +5,7 @@ import InputSuggester from "src/gui/InputSuggester/inputSuggester";
 import MultiSuggester from "src/gui/MultiSuggester/multiSuggester";
 import VDateInputPrompt from "src/gui/VDateInputPrompt/VDateInputPrompt";
 import type { IChoiceExecutor } from "../IChoiceExecutor";
+import type { RunClocks } from "../types/dateOrigin";
 import {
 	GLOBAL_VAR_REGEX,
 	INLINE_JAVASCRIPT_REGEX,
@@ -24,7 +25,7 @@ import {
 	FieldSuggestionParser,
 	type FieldFilter,
 } from "../utils/FieldSuggestionParser";
-import { EnhancedFieldSuggestionFileFilter } from "../utils/EnhancedFieldSuggestionFileFilter";
+import { FieldSuggestionFileFilter } from "../utils/FieldSuggestionFileFilter";
 import {
 	buildFileDisplayLabels,
 	FILE_CUSTOM_PREFIX,
@@ -77,6 +78,10 @@ export class CompleteFormatter extends Formatter {
 		if (choiceExecutor) {
 			this.variables = choiceExecutor?.variables;
 		}
+	}
+
+	protected runClocks(): RunClocks | undefined {
+		return this.choiceExecutor?.clocks ?? this.clocks;
 	}
 
 	protected async format(input: string): Promise<string> {
@@ -160,6 +165,24 @@ export class CompleteFormatter extends Formatter {
 			activeFolder: "path",
 		});
 		return output;
+	}
+
+	async formatPropertyName(input: string): Promise<string> {
+		return await this.withPromptScope("propertyName", input, async () =>
+			this.replaceCurrentFileTokensInString(await this.format(input), {
+				links: true, fileName: true, folder: true, activeFolder: "content", title: true,
+			}),
+		);
+	}
+
+	async formatPropertyValue(input: string): Promise<unknown> {
+		return await this.preserveSingleTokenValue(input, () =>
+			this.withPromptScope("propertyValue", input, async () =>
+				this.replaceCurrentFileTokensInString(await this.format(input), {
+					links: true, fileName: true, folder: true, activeFolder: "content", title: true,
+				}),
+			),
+		);
 	}
 
 	async formatFileContent(input: string): Promise<string> {
@@ -1090,7 +1113,7 @@ export class CompleteFormatter extends Formatter {
 		// is driving; the vault-side file filtering below still runs unchanged.
 		const provider = this.choiceExecutor?.promptProvider;
 		try {
-			const files = EnhancedFieldSuggestionFileFilter.filterFiles(
+			const files = FieldSuggestionFileFilter.filterFiles(
 				this.app.vault.getMarkdownFiles(),
 				parsed.filter,
 				(file) => this.app.metadataCache.getFileCache(file),

@@ -4,7 +4,6 @@ import { FileNameDisplayFormatter } from "src/formatters/fileNameDisplayFormatte
 import type QuickAdd from "src/main";
 import type IChoice from "src/types/choices/IChoice";
 import type ITemplateChoice from "src/types/choices/ITemplateChoice";
-import { VALUE_SYNTAX } from "src/constants";
 import { MacroAbortError } from "src/errors/MacroAbortError";
 import { log } from "src/logger/logManager";
 import { OnePageInputModal, type PreviewRow } from "./OnePageInputModal";
@@ -18,8 +17,41 @@ import {
 	collectChoiceRequirements,
 	getUnresolvedRequirements,
 } from "./collectChoiceRequirements";
-import { shouldLeaveTemplateTitleForDiscovery } from "src/utils/templateNoteDiscoveryEligibility";
 import type { FormAnswer } from "src/interactive/promptProvider";
+import { QA_INTERNAL_DATE_ORIGIN } from "src/constants";
+import { normalizeDateOrigin, type RunClocks } from "src/types/dateOrigin";
+import { dateOriginForPick } from "src/types/dateOriginPresets";
+import { planDateOrigin } from "src/utils/resolveDateOrigin";
+import { buildDiscoveryFormPlan, storeDiscoveryFormAnswers } from "./discoveryFormPlan";
+import { hasActivePreparedChoiceInputs } from "./preparedChoiceInputs";
+
+/**
+ * The clocks the run will format `{{DATE}}` with, resolved from the choice's
+ * Which day setting and the form's own date field, so the file-name preview
+ * shows the day about to be written rather than today (mirrors
+ * `ChoiceExecutor.applyDateOrigin`).
+ */
+function previewRunClocks(
+	choice: IChoice,
+	choiceExecutor: IChoiceExecutor,
+	values: Record<string, unknown>,
+): RunClocks | undefined {
+	const setting = choiceExecutor.pickDate
+		? dateOriginForPick(normalizeDateOrigin(choice.dateOrigin))
+		: normalizeDateOrigin(choice.dateOrigin);
+	const plan = planDateOrigin({
+		setting,
+		clocks: choiceExecutor.clocks,
+		variables: new Map<string, unknown>([
+			...choiceExecutor.variables,
+			...Object.entries(values),
+		]),
+		reservedSeed:
+			setting?.kind === "ask" ? values[QA_INTERNAL_DATE_ORIGIN] : undefined,
+	});
+	if (plan.status !== "set") return choiceExecutor.clocks;
+	return { now: choiceExecutor.clocks?.now ?? new Date(), date: plan.date };
+}
 
 /**
  * Reconstruct the picked labels from the ", "-joined suggester string.
@@ -88,19 +120,6 @@ export function orderOnePageFilePicks(
 	];
 }
 
-function shouldPromptAtRuntimeForDiscovery(
-	choice: IChoice,
-	requirementId: string,
-): boolean {
-	if (choice.type !== "Template" || requirementId !== "value") return false;
-
-	const templateChoice = choice as ITemplateChoice;
-	const format = templateChoice.fileNameFormat?.enabled
-		? templateChoice.fileNameFormat.format
-		: VALUE_SYNTAX;
-	return shouldLeaveTemplateTitleForDiscovery(templateChoice, format);
-}
-
 export async function runOnePagePreflight(
 	app: App,
 	plugin: QuickAdd,
@@ -108,7 +127,11 @@ export async function runOnePagePreflight(
 	choice: IChoice,
 ): Promise<boolean> {
 	try {
-		const requirements = await collectChoiceRequirements(
+		if (hasActivePreparedChoiceInputs(choiceExecutor, choice.id)) return false;
+		const discoveryPlan = choiceExecutor.promptProvider
+			? null
+			: await buildDiscoveryFormPlan(app, plugin, choiceExecutor, choice);
+		const requirements = discoveryPlan?.requirements ?? await collectChoiceRequirements(
 			app,
 			plugin,
 			choiceExecutor,
@@ -132,9 +155,7 @@ export async function runOnePagePreflight(
 		if (unresolved.length === 0) return false; // Everything prefilled, skip modal
 
 		const modalRequirements = unresolved.filter(
-			(requirement) =>
-				!requirement.runtimeOnly &&
-				!shouldPromptAtRuntimeForDiscovery(choice, requirement.id),
+			(requirement) => !requirement.runtimeOnly || discoveryPlan?.config.fieldUsages.has(requirement.id),
 		);
 		if (modalRequirements.length === 0) return false;
 
@@ -159,6 +180,9 @@ export async function runOnePagePreflight(
 				// formatter has no inert stand-in for: inline `js quickadd` fences and
 				// macros, which the run really does execute inside an included body.
 				const formatter = new FileNameDisplayFormatter(app, plugin);
+				formatter.setRunClocks(
+					previewRunClocks(choice, choiceExecutor, values),
+				);
 				const out: PreviewRow[] = [];
 				// File name preview for Template
 				if (choice.type === "Template") {
@@ -207,6 +231,7 @@ export async function runOnePagePreflight(
 				modalRequirements,
 				choiceExecutor.variables,
 				computePreview,
+				discoveryPlan?.config,
 			);
 			values = await modal.waitForClose;
 		}
@@ -237,7 +262,7 @@ export async function runOnePagePreflight(
 				displayToValue: Map<string, string>;
 			}
 		>();
-		for (const req of modalRequirements) {
+		for (const req of modal?.activeRequirements ?? modalRequirements) {
 			if (req.id.startsWith(FILE_VARIABLE_PREFIX)) {
 				const options = req.options ?? [];
 				const displayOptions = req.displayOptions ?? options;
@@ -271,7 +296,7 @@ export async function runOnePagePreflight(
 			}
 		}
 
-		// Store results into executor variables
+		const answerVariables = discoveryPlan ? new Map<string, unknown>() : choiceExecutor.variables;
 		Object.entries(values).forEach(([k, v]) => {
 			const fileInfo = fileInfoByKey.get(k);
 			if (fileInfo !== undefined) {
@@ -291,7 +316,7 @@ export async function runOnePagePreflight(
 				const normalized = orderedPicks.map((value) =>
 					canonicalizeOnePageFileValue(value, fileInfo.options),
 				);
-				choiceExecutor.variables.set(
+				answerVariables.set(
 					k,
 					fileInfo.multiSelect ? normalized : (normalized[0] ?? ""),
 				);
@@ -316,14 +341,17 @@ export async function runOnePagePreflight(
 					// Map the display label back to its value; a typed custom value
 					// (no mapping) passes through unchanged.
 					.map((label) => multiInfo.displayToValue.get(label) ?? label);
-				choiceExecutor.variables.set(
+				answerVariables.set(
 					k,
 					multiInfo.emit === "linklist" ? items.map(toWikiLink) : items,
 				);
 				return;
 			}
-			choiceExecutor.variables.set(k, v);
+			answerVariables.set(k, v);
 		});
+		if (discoveryPlan && modal) {
+			storeDiscoveryFormAnswers(choiceExecutor, discoveryPlan, answerVariables, modal.discoverySelections);
+		}
 
 		return true;
 	} catch (error) {

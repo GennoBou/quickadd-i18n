@@ -12,6 +12,7 @@ import {
 	getDefaultBehaviorForCategory,
 	getFileExistsMode,
 	getModesForCategory,
+	existingNoteActions,
 } from "../../template/fileExistsPolicy";
 import { log } from "../../logger/logManager";
 import { getAllFolderPathsInVault, getTemplateFile } from "../../utilityObsidian";
@@ -39,6 +40,8 @@ import AppendLinkSetting from "./components/AppendLinkSetting.svelte";
 import OpenFileSetting from "./components/OpenFileSetting.svelte";
 import FileOpeningSetting from "./components/FileOpeningSetting.svelte";
 import OnePageOverrideSetting from "./components/OnePageOverrideSetting.svelte";
+import DateOriginSetting from "./components/DateOriginSetting.svelte";
+import CommandPaletteSetting from "./components/CommandPaletteSetting.svelte";
 import ChoiceIconSetting from "./components/ChoiceIconSetting.svelte";
 import { suggester } from "./components/suggesterAction";
 import { VALUE_SYNTAX } from "../../constants";
@@ -99,7 +102,7 @@ const discoverySupported = $derived(
 );
 const discoveryDescription = $derived(
 	discoverySupported
-		? t("For the default note-title prompt, show matching notes first. Choosing one opens it unchanged; choosing the create row continues with this template.")
+		? t("Show matching notes and unresolved links in the note-title prompt.")
 		: t("Only available when the file name prompt is the default note title: no custom format, {{VALUE}}, or {{NAME}}."),
 );
 
@@ -152,10 +155,6 @@ function addFolder() {
 	}
 	choice.folder.folders.push(input);
 	folderInputValue = "";
-}
-
-function deleteFolder(folder: string) {
-	choice.folder.folders = choice.folder.folders.filter((f) => f !== folder);
 }
 
 function onFolderInputKeypress(event: KeyboardEvent) {
@@ -252,7 +251,10 @@ function onModeChange(value: string) {
 {#if folderMode === "specified"}
 	<div class="folderSelectionContainer">
 		<div class="folderList">
-			<FolderList folders={choice.folder.folders} {deleteFolder} />
+			<FolderList
+				folders={choice.folder.folders}
+				onChange={(next) => (choice.folder.folders = next)}
+			/>
 		</div>
 		<div class="folderInputContainer">
 			<input
@@ -318,8 +320,25 @@ function onModeChange(value: string) {
 	{/snippet}
 </SettingItem>
 
+{#if discoverySupported && choice.discoverExistingNotesBeforeCreate}
+	<SettingItem name="When selecting an existing note">
+		{#snippet control()}
+			<Dropdown
+				value={choice.existingNoteAction ?? "open"}
+				options={existingNoteActions.map((action) => ({ value: action.id, label: action.label }))}
+				onchange={(value) => {
+					const action = existingNoteActions.find((action) => action.id === value);
+					if (action) choice.existingNoteAction = action.id;
+				}}
+			/>
+		{/snippet}
+	</SettingItem>
+{/if}
+
 <SettingItem
-	name={t("If the target file already exists")}
+	name={discoverySupported && choice.discoverExistingNotesBeforeCreate
+		? t("If a new note's path already exists")
+		: t("If the target file already exists")}
 	desc={t("Choose whether QuickAdd should ask what to do, update the existing file, create another file, or keep the existing file.")}
 >
 	{#snippet control()}
@@ -357,6 +376,15 @@ function onModeChange(value: string) {
 	<FileOpeningSetting bind:fileOpening={choice.fileOpening} contextLabel={t("created")} />
 {/if}
 
+<DateOriginSetting bind:dateOrigin={choice.dateOrigin} />
+
 <OnePageOverrideSetting bind:onePageInput={choice.onePageInput} />
+
+<CommandPaletteSetting
+	bind:command={choice.command}
+	bind:pickDayCommand={choice.pickDayCommand}
+	name={choice.name}
+	dateOrigin={choice.dateOrigin}
+/>
 
 <ChoiceIconSetting bind:icon={choice.icon} type={choice.type} {app} />

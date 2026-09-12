@@ -1,11 +1,12 @@
 ---
 title: Template
-description: "Create a new note from a template file: dynamic paths and file names, a destination folder, linking, and what to do when the note already exists"
+description: "Create or update a note from a template file: dynamic paths and file names, a destination folder, linking, and actions for existing notes"
 slug: docs/Choices/TemplateChoice
 ---
 
-A Template choice creates a **new note from a template file**. Press a hotkey,
-answer any prompts, and QuickAdd builds the note - filling in dates, your
+A Template choice creates a **new note from a template file** or applies a
+template to an existing note. Press a hotkey, answer any prompts, and QuickAdd
+builds the note - filling in dates, your
 answers, and links as it goes. Use it to spin up a book note, a meeting note, or
 a project page from a layout you keep once and reuse everywhere.
 
@@ -190,9 +191,64 @@ the default note-title prompt. It opens the same discovery-first picker used by
 **New note from template**: matching notes and unresolved wikilink targets appear
 while you type, so you can open an existing note instead of creating a duplicate.
 
-Selecting an existing note opens it unchanged and does **not** apply the
-template, append template content, insert links, or copy links. Selecting the
-explicit **Create new note** row continues with normal Template creation.
+**When selecting an existing note** controls what selecting a match does:
+
+| Action | Result |
+| --- | --- |
+| **Open note** | Opens the note unchanged. This is the default. |
+| **Append template to bottom** | Adds the template at the end of the note. |
+| **Insert template at top** | Adds the template below the note's frontmatter. |
+| **Replace entire note** | Replaces all content, including frontmatter, with the template. |
+
+Append and insert use the same [frontmatter merging](#update-existing-file)
+as the other template update actions. Applying a template to a selected note
+requires a Markdown template.
+The picker names the action beside each existing note, so an update is visible
+before you select it.
+
+The selected note keeps its path and name. QuickAdd skips **File Name Format**,
+**New note location**, and the new-note collision setting. `{{TITLE}}` and the
+anonymous `{{VALUE}}` use the selected note's basename, and `{{FOLDER}}` uses its
+folder. The template's other inputs still appear, including in the
+[one-page form](/docs/Advanced/onePageInputs/#choose-or-create-a-note).
+
+An update finishes before the next Macro step runs and follows the choice's
+linking, clipboard, and **Open** settings. **Open note** always opens the selected
+note without applying the template, inserting links, or copying links.
+
+Selecting **Create new note** or an unresolved wikilink target continues with
+normal Template creation. **If a new note's path already exists** handles any
+collision at that generated path. The standalone **New note from template**
+command keeps the **Open note** behavior for existing matches.
+
+## Which day `{{DATE}}` is about {#date-origin}
+
+Most of the time you want today. That's the default, and you can leave it
+alone.
+
+Sometimes you don't. Last week's review, yesterday's daily, the Friday you
+forgot to write. **Which day** is the calendar day `{{DATE}}` uses. The
+template file stays the same. `{{TIME}}` is still the time you ran the
+choice, so a "written at" stamp stays honest.
+
+- **Today** is the default.
+- **Ask each time** opens a date picker. **Picker starts on** is only the
+  first value in that picker. You can still click another day.
+- **Yesterday**, **Last week**, **Next week**, and **Last month** cover the
+  usual jobs. A weekly note with `|startof:week` still lands in the right
+  week.
+- **Custom…** is any other jump from today, like three days back or last
+  year.
+- **A variable…** is for a `{{VDATE}}` or a script that already has the day.
+
+When it isn't today, hold Shift in the QuickAdd menu and the same choice asks
+for the day. If you want a hotkey for that, see
+[Command palette](#command-palette) below. You don't need a second Daily
+Note choice.
+
+Scripts and the CLI can pass a day too:
+`executeChoice("Weekly review", {}, { date: "last week" })`, or `date=ask`
+if you want the picker.
 
 ## Decide where the note is created: New note location {#new-note-location}
 
@@ -202,8 +258,10 @@ Pick one of four modes:
 - **Obsidian default** - use Obsidian's "Default location for new notes" setting.
 - **In a specific folder** - create the note in the folder(s) you configure
   below. One folder creates the note there; several folders open a suggester
-  asking which to use. An **Include subfolders** toggle (shown only in this
-  mode) lets the suggester offer the selected folders *and* their subfolders.
+  asking which to use. Drag a folder's handle, or focus the handle and press
+  ArrowUp / ArrowDown, to change the suggester order. An **Include subfolders**
+  toggle (shown only in this mode) lets the suggester offer the selected folders
+  *and* their subfolders.
 - **Same folder as current file** - create the note next to the currently active
   file (falls back to the vault root if no file is open).
 - **Ask for folder each time** - prompt you to pick any folder in the vault each
@@ -329,12 +387,28 @@ appear (these are shared with the Capture choice):
 - **Focus new pane** - shown for every location except **Reuse current tab**.
   Focus the opened tab immediately after opening.
 
+## Run it from a hotkey: Command palette {#command-palette}
+
+**Add to command palette** registers the choice as an Obsidian command, so
+you can bind a hotkey to it. It is the same switch as the lightning bolt in
+the choice list.
+
+Once it is on, and [Which day](#date-origin) isn't **Ask each time**, a
+second toggle appears: **Also add "Name (pick a day)"**. That registers one
+more command that asks which day before it runs, so you can have one hotkey
+for today's note and another for any other day, from the same choice. Your
+main hotkey keeps using Which day.
+
 ## When the note already exists {#file-already-exists-behavior}
 
 **If the target file already exists** decides what QuickAdd does when a note with
 the target name is already there. The setting works in two steps: first pick a
 high-level behavior, then a follow-up field appears for the two behaviors that
 need a detail.
+
+With **Search existing notes before creating** enabled, this setting is called
+**If a new note's path already exists**. It applies to new-note creation.
+[Selecting an existing match](#search-existing) has its own action.
 
 - **If the target file already exists** - choose **Ask every time**, **Update
   existing file**, **Create another file**, or **Keep existing file**.
