@@ -1,5 +1,5 @@
+import { POLL_OPTS, waitForElement, typeInto, pressKey, expectNoPrompt } from "./uiHelpers";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ObsidianClient } from "obsidian-e2e";
 import { CaptureChoice } from "../../src/types/choices/CaptureChoice";
 import type IChoice from "../../src/types/choices/IChoice";
 import { MacroChoice } from "../../src/types/choices/MacroChoice";
@@ -9,7 +9,6 @@ import { createQuickAddE2EHarness, seedVaultFile } from "./e2eVault";
 
 const getContext = createQuickAddE2EHarness("template-discovery-actions");
 const WAIT_OPTS = { timeoutMs: 10_000, intervalMs: 200 };
-const POLL_OPTS = { timeout: 10_000, interval: 200 };
 const INITIAL_CONTENT = "---\nstatus: active\n---\n# Existing note\n";
 const VALUE_INPUT = '.qaInputPrompt input[type="text"], .qaInputPrompt textarea';
 
@@ -17,44 +16,6 @@ type QuickAddData = {
 	choices: IChoice[];
 	onePageInputEnabled: boolean;
 };
-
-async function waitForElement(obsidian: ObsidianClient, selector: string) {
-	await expect.poll(() => obsidian.dev.evalJson<boolean>(
-		`Boolean(document.querySelector(${JSON.stringify(selector)})?.getClientRects().length)`,
-	), POLL_OPTS).toBe(true);
-}
-
-async function typeInto(obsidian: ObsidianClient, selector: string, text: string) {
-	expect(await obsidian.dev.evalJson<boolean>(`(() => {
-		const input = document.querySelector(${JSON.stringify(selector)});
-		if (!(input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement)) return false;
-		input.focus();
-		input.select();
-		return true;
-	})()`)).toBe(true);
-	await obsidian.exec("dev:cdp", {
-		method: "Input.insertText",
-		params: JSON.stringify({ text }),
-	});
-}
-
-async function pressKey(obsidian: ObsidianClient, key: "Enter" | "Escape", modified = false) {
-	const modifiers = modified
-		? (await obsidian.dev.evalJson<string>("process.platform")) === "darwin" ? 4 : 2
-		: 0;
-	for (const type of ["keyDown", "keyUp"]) {
-		await obsidian.exec("dev:cdp", {
-			method: "Input.dispatchKeyEvent",
-			params: JSON.stringify({ type, key, code: key, windowsVirtualKeyCode: key === "Enter" ? 13 : 27, modifiers }),
-		});
-	}
-}
-
-async function expectNoPrompt(obsidian: ObsidianClient) {
-	await expect.poll(() => obsidian.dev.evalJson<boolean>(
-		'Boolean(document.querySelector(".modal-container, .prompt"))',
-	), POLL_OPTS).toBe(false);
-}
 
 async function closeOpenPrompts() {
 	const { obsidian } = getContext();
@@ -159,6 +120,35 @@ describe("Template actions for discovered existing notes", () => {
 		await expectNoPrompt(workflow.obsidian);
 		await expect.poll(() => workflow.obsidian.dev.evalJson<string>("app.workspace.getActiveFile()?.path ?? ''"), POLL_OPTS).toBe(workflow.targetPath);
 		expect(await workflow.sandbox.read(workflow.relativePath)).toBe(INITIAL_CONTENT);
+	});
+
+	it("asks for an Ask-each-time date after the step-by-step picker, only when creating", async () => {
+		const workflow = await seedTemplate("date-after-picker", { body: "Date: {{DATE}}\n", folder: "created" });
+		workflow.template.dateOrigin = { kind: "ask" };
+		await runChoice(workflow.template, false);
+		await chooseExisting(workflow, false);
+		await expectNoPrompt(workflow.obsidian);
+		await expect.poll(() => workflow.obsidian.dev.evalJson<string>("app.workspace.getActiveFile()?.path ?? ''"), POLL_OPTS)
+			.toBe(workflow.targetPath);
+		expect(await workflow.sandbox.read(workflow.relativePath)).toBe(INITIAL_CONTENT);
+
+		await workflow.obsidian.exec("command", { id: `quickadd:choice:${workflow.template.id}` });
+		const picker = `input[placeholder=${JSON.stringify(`Search notes or create ${workflow.template.name}`)}]`;
+		await waitForElement(workflow.obsidian, picker);
+		expect(await workflow.obsidian.dev.evalJson<boolean>('Boolean(document.querySelector(".qaDatePrompt"))')).toBe(false);
+		await typeInto(workflow.obsidian, picker, "Dated note");
+		await expect.poll(() => workflow.obsidian.dev.evalJson<string>(
+			'document.querySelector(".suggestion-item.is-selected .suggestion-title")?.textContent ?? ""',
+		), POLL_OPTS).toBe("Create new note: Dated note");
+		await pressKey(workflow.obsidian, "Enter");
+		await waitForElement(workflow.obsidian, ".qaDatePrompt .qa-vdate-input");
+		await typeInto(workflow.obsidian, ".qaDatePrompt .qa-vdate-input", "2026-09-15");
+		await pressKey(workflow.obsidian, "Enter");
+		const content = await workflow.sandbox.waitForContent(
+			`${workflow.name}/new/created/Dated note.md`, (text) => text.includes("Date:"), WAIT_OPTS,
+		);
+		expect(content).toBe("Date: 2026-09-15\n");
+		await expectNoPrompt(workflow.obsidian);
 	});
 
 	it("rejects a dynamic template source that resolves to the selected note", async () => {
@@ -309,7 +299,7 @@ describe("Template actions for discovered existing notes", () => {
 		expect(await workflow.sandbox.read(workflow.relativePath)).toBe(INITIAL_CONTENT);
 		await pressKey(workflow.obsidian, "Enter", true);
 		const content = await workflow.sandbox.waitForContent(workflow.relativePath, (text) => text.includes("Follow-up (Ada)"), WAIT_OPTS);
-		expect(content.trimEnd()).toBe(`${INITIAL_CONTENT}\nOwner: Ada\n\nFollow-up (Ada)`);
+		expect(content.trimEnd()).toBe(`${INITIAL_CONTENT}\nOwner: Ada\nFollow-up (Ada)`);
 		await expectNoPrompt(workflow.obsidian);
 		expect(await workflow.obsidian.dev.evalJson<string | null>("app.workspace.getActiveFile()?.path ?? null"))
 			.toBe(workflow.targetPath);

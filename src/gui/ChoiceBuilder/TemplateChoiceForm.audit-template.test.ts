@@ -1,8 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
-
-// FormatPreviewField -> FileNameDisplayFormatter and the suggesters reach the
-// formatter/engine graph, which pulls obsidian-dataview's CJS require('obsidian').
-vi.mock("obsidian-dataview", () => ({ getAPI: vi.fn() }));
+// @vitest-environment jsdom
+import { templateChoice } from "../../../tests/helpers/settings/choices";
+import { settingItem } from "../../../tests/helpers/settings/fields";
+import { describe, expect, it } from "vitest";
 
 import { App } from "obsidian";
 import { fireEvent, render } from "@testing-library/svelte";
@@ -12,34 +11,6 @@ import type ITemplateChoice from "../../types/choices/ITemplateChoice";
 import TemplateChoiceForm from "./TemplateChoiceForm.svelte";
 import { createTemplateChoiceFormProps } from "./templateChoiceFormProps.svelte";
 
-function templateChoice(overrides: Partial<ITemplateChoice> = {}): ITemplateChoice {
-	return {
-		id: "t1",
-		name: "My Template",
-		type: "Template",
-		command: false,
-		templatePath: "",
-		folder: {
-			enabled: false,
-			folders: [],
-			chooseWhenCreatingNote: false,
-			createInSameFolderAsActiveFile: false,
-			chooseFromSubfolders: false,
-		},
-		fileNameFormat: { enabled: false, format: "" },
-		discoverExistingNotesBeforeCreate: false,
-		appendLink: false,
-		openFile: false,
-		fileOpening: {
-			location: "tab",
-			direction: "vertical",
-			mode: "default",
-			focus: true,
-		},
-		fileExistsBehavior: { kind: "prompt" },
-		...overrides,
-	};
-}
 
 const plugin = {
 	getTemplateFiles: () => [],
@@ -48,7 +19,7 @@ const plugin = {
 
 function mountForm(overrides: Partial<ITemplateChoice> = {}) {
 	const props = createTemplateChoiceFormProps({
-		choice: templateChoice(overrides),
+		choice: templateChoice({ discoverExistingNotesBeforeCreate: false, ...overrides }),
 		app: new App(),
 		plugin,
 	});
@@ -58,14 +29,6 @@ function mountForm(overrides: Partial<ITemplateChoice> = {}) {
 	return { ...result, props };
 }
 
-function settingItem(container: HTMLElement, name: string): HTMLElement {
-	const item = Array.from(container.querySelectorAll(".setting-item")).find(
-		(el) =>
-			el.querySelector(".setting-item-name")?.textContent?.trim() === name,
-	);
-	if (!item) throw new Error(`Setting item not found: ${name}`);
-	return item as HTMLElement;
-}
 
 describe("TemplateChoiceForm — empty folder Add is a no-op (audit)", () => {
 	it("ignores a blank/whitespace Add and keeps the empty-folders warning visible", async () => {

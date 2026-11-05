@@ -1,6 +1,12 @@
-import { MarkdownView, type App, type TFile } from "obsidian";
+import { MarkdownView, normalizePath, type App, type EventRef, type TFile } from "obsidian";
 import { log } from "../logger/logManager";
 import { reportError } from "./errorUtils";
+
+declare module "obsidian" {
+	interface Workspace {
+		on(name: "templater:overwrite-file", callback: (event: { file: TFile; content: string }) => void): EventRef;
+	}
+}
 
 export type TemplaterPluginLike = {
 	settings?: {
@@ -41,7 +47,7 @@ type EditorSnapshot = {
 };
 
 const TEMPLATER_CURSOR_MARKER_REGEX =
-	/<%\s*tp\.file\.cursor\([0-9]*\)\s*%>/g;
+	/<%\s*tp\.file\.cursor\((?:-?[0-9]+(?:\.[0-9]+)?)?\)\s*%>/g;
 
 function getActiveEditorSnapshot(
 	app: App,
@@ -172,6 +178,108 @@ export function isTemplaterTriggerOnCreateEnabled(app: App): boolean {
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+type TemplaterCreateHandler = (...args: unknown[]) => unknown;
+type TemplaterClassLike = { on_file_creation?: TemplaterCreateHandler };
+
+/** Paths QuickAdd is creating right now, and Templater's handling of each. */
+const awaitedCreates = new Map<string, Promise<unknown> | null>();
+let createHook: { owner: TemplaterClassLike; original: TemplaterCreateHandler; wrapper: TemplaterCreateHandler } | null = null;
+
+function hookTemplaterCreateHandler(owner: TemplaterClassLike, original: TemplaterCreateHandler): void {
+	if (createHook) return;
+	const wrapper: TemplaterCreateHandler = function (this: unknown, ...args: unknown[]) {
+		const run = original.apply(this, args);
+		// The note is the last argument in every Templater version (1.16 to 2.25).
+		const path = (args[args.length - 1] as { path?: unknown } | undefined)?.path;
+		if (typeof path === "string" && awaitedCreates.has(path)) awaitedCreates.set(path, Promise.resolve(run));
+		return run;
+	};
+	owner.on_file_creation = wrapper;
+	createHook = { owner, original, wrapper };
+}
+
+function unhookTemplaterCreateHandler(): void {
+	if (!createHook || awaitedCreates.size > 0) return;
+	// Leave a handler someone else installed after us in place.
+	if (createHook.owner.on_file_creation === createHook.wrapper) {
+		createHook.owner.on_file_creation = createHook.original;
+	}
+	createHook = null;
+}
+
+// The longest the previous polling wait could take; a stuck Templater run
+// (for example a prompt left open) must not hold the capture forever.
+const TEMPLATER_CREATE_WAIT_MS = 5000;
+
+/**
+ * Creates `path`, then returns once Templater's "Trigger on new file creation"
+ * is done with it, so text QuickAdd adds next is not overwritten or reordered.
+ *
+ * Templater registers its static `Templater.on_file_creation` for the vault's
+ * create event and looks it up on the class at each event. About 300 ms later
+ * that handler decides by itself whether to render a folder template, run the
+ * note's commands, or leave the note alone, and in the last case it signals
+ * nothing. So, only while this note is created, the handler is wrapped: the
+ * promise it returns for this path is awaited, and every other call (other
+ * notes, sync, other plugins) passes through with its own result. If the
+ * handler is missing or never ran for this path, the pending-set poll is used.
+ */
+export async function createNoteAfterTemplaterTrigger(
+	app: App,
+	requestedPath: string,
+	create: () => Promise<TFile>,
+): Promise<TFile> {
+	// vault.create stores, and Templater receives, the normalized path; a
+	// Canvas file card can name its note as "Notes//a.md" or "/Notes/a.md".
+	const path = normalizePath(requestedPath);
+	let owner: TemplaterClassLike | undefined;
+	let original: unknown;
+	try {
+		owner = isTemplaterTriggerOnCreateEnabled(app)
+			? getTemplaterPlugin(app)?.templater?.constructor as TemplaterClassLike | undefined
+			: undefined;
+		original = owner?.on_file_creation;
+	} catch {
+		owner = undefined;
+	}
+	const usable = !!owner && typeof original === "function" && !awaitedCreates.has(path);
+	if (!usable) {
+		const file = await create();
+		await waitForTemplaterTriggerOnCreateToComplete(app, file);
+		return file;
+	}
+
+	awaitedCreates.set(path, null);
+	hookTemplaterCreateHandler(owner as TemplaterClassLike, original as TemplaterCreateHandler);
+	let file: TFile;
+	let run: Promise<unknown> | null;
+	try {
+		file = await create();
+	} finally {
+		// Obsidian emits "create" before vault.create resolves, so Templater has
+		// been called for this note by now if it is listening.
+		run = awaitedCreates.get(path) ?? null;
+		awaitedCreates.delete(path);
+		unhookTemplaterCreateHandler();
+	}
+	if (!run || file.path !== path) {
+		await waitForTemplaterTriggerOnCreateToComplete(app, file);
+		return file;
+	}
+	let timer: number | undefined;
+	try {
+		await Promise.race([
+			run,
+			new Promise<void>((resolve) => { timer = window.setTimeout(resolve, TEMPLATER_CREATE_WAIT_MS); }),
+		]);
+	} catch (err) {
+		log.logWarning(`Templater failed on new note ${file.path}: ${(err as Error).message}`);
+	} finally {
+		window.clearTimeout(timer);
+	}
+	return file;
 }
 
 export async function waitForTemplaterTriggerOnCreateToComplete(
@@ -417,17 +525,17 @@ export async function overwriteTemplaterOnce(
 	app: App,
 	file: TFile,
 	opts: { skipIfNoTags?: boolean; postWait?: boolean } = {},
-): Promise<void> {
-	if (file.extension !== "md") return;
+): Promise<boolean> {
+	if (file.extension !== "md") return false;
 
 	const plugin = getTemplaterPlugin(app);
 	const templater = plugin?.templater;
 	const overwrite = templater?.overwrite_file_commands;
-	if (!plugin || !templater || typeof overwrite !== "function") return;
+	if (!plugin || !templater || typeof overwrite !== "function") return false;
 
 	const { skipIfNoTags = true, postWait = true } = opts;
 
-	await withTemplaterFileLock(file.path, async () => {
+	return await withTemplaterFileLock(file.path, async () => {
 		// Ensure the initial QuickAdd write is flushed & stable on disk.
 		await waitForFileSettle(app, file);
 
@@ -439,32 +547,35 @@ export async function overwriteTemplaterOnce(
 				err as Error,
 				`overwriteTemplaterOnce: failed to read ${file.path} before render`,
 			);
-			return;
+			return false;
 		}
 
 		if (skipIfNoTags && !original.includes("<%")) {
-			return;
+			return false;
 		}
 
+		let renderedContent: string | null = null;
+		const listener = app.workspace.on("templater:overwrite-file", (event: { file: TFile; content: string }) => {
+			if (event.file.path === file.path) renderedContent = event.content;
+		});
 		try {
 			// Preserve Templater's internal `this` context.
 			await overwrite.call(templater, file);
+			const cursorHandled = didConsumeTemplaterCursorMarker(
+				renderedContent, getActiveEditorSnapshot(app, file).value,
+			);
 			if (postWait) {
 				await waitForFileSettle(app, file, 800);
 			}
+			return cursorHandled;
 		} catch (err) {
-			// Roll back to original content to avoid partial renders
-			try {
-				await app.vault.modify(file, original);
-			} catch (rollbackErr) {
-				log.logWarning(
-					`Failed to rollback ${file.path} after Templater error: ${(rollbackErr as Error).message}`,
-				);
-			}
-			reportError(
-				err as Error,
-				`Templater failed on ${file.path}. Rolled back to pre-render state.`,
-			);
+			// Templater catches template errors itself: it shows a notice and skips
+			// the write. An error that reaches here can come after the rendered note
+			// was saved, so leave the note as it is.
+			reportError(err as Error, `Templater failed on ${file.path}`);
+			return false;
+		} finally {
+			app.workspace.offref(listener);
 		}
 	});
 }

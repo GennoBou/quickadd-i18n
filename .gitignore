@@ -37,3 +37,6 @@ coverage/
 
 # Serena MCP
 .serena/
+
+# Overlays from svelte-check --tsgo or --incremental runs
+.svelte-check/

@@ -13,7 +13,9 @@ call an AI model, or read values already in your vault.
 | Module | What it does |
 | --- | --- |
 | [User input](#user-input-methods) | Ask for text, pick from a list, confirm, or collect several answers at once |
-| [Choice execution](#choice-execution) | Run another choice, or apply a template to the current note |
+| [Choice execution](#choice-execution) | Pick, look up, or run a choice, or apply a template to the current note |
+| [Packages](#packages) | Install a ready-made package that your plugin ships |
+| [Formatting](#formatting) | Run format syntax such as `{{DATE}}` or `{{VALUE:name}}` on a string |
 | [Utility](#utility-module) | Read and set the clipboard, read the editor's selection |
 | [Date](#date-module) | Format today, tomorrow, yesterday, or any day offset |
 | [AI](#ai-module) | Send prompts, build tool-calling agents, get structured output |
@@ -384,7 +386,7 @@ module.exports = async (params) => {
 };
 ```
 
-### `checkboxPrompt(items: string[], selectedItems?: string[]): Promise<string[]>`
+### `checkboxPrompt(items: string[], selectedItems?: string[], header?: string): Promise<string[]>`
 Opens a checkbox prompt allowing multiple selections.
 
 ![Searchable checkbox prompt with selected options and fixed action buttons](/img/checkbox-prompt-searchable.png)
@@ -392,6 +394,7 @@ Opens a checkbox prompt allowing multiple selections.
 **Parameters:**
 - `items`: Array of options to display
 - `selectedItems`: (Optional) Array of pre-selected items
+- `header`: (Optional) Title shown above the list
 
 **Returns:** Promise resolving to an array of selected item strings.
 
@@ -405,15 +408,33 @@ const features = await quickAddApi.checkboxPrompt(
 console.log("Enabled features:", features);
 ```
 
+### `datePrompt(header: string, options?: { placeholder?: string, defaultValue?: string, dateFormat?: string }): Promise<string>`
+Opens the date prompt: a text field that understands dates like `tomorrow` or `next friday`, with a calendar and a preview below it.
+
+**Parameters:**
+- `header`: The prompt title
+- `options.placeholder`: (Optional) Placeholder text in the field
+- `options.defaultValue`: (Optional) Date the field starts with, such as `2026-01-05` or `today`
+- `options.dateFormat`: (Optional) Moment.js format for the returned date
+
+**Returns:** Promise resolving to the chosen date in `dateFormat`, or as an ISO timestamp (`2026-09-30T20:21:24.495Z`) when you leave `dateFormat` out. Text that isn't a date comes back as typed, and QuickAdd shows a notice that it couldn't parse it, so check the value if your script needs a real date. Submitting an empty field resolves to the `defaultValue` date, returned the same way, when you set one, and to `""` otherwise. Cancelling rejects with `MacroAbortError`.
+
+**Example:**
+```javascript
+const due = await quickAddApi.datePrompt("Due date", { dateFormat: "YYYY-MM-DD" });
+```
+
 ## Choice Execution
 
-### `executeChoice(choiceName: string, variables?: {[key: string]: any}, options?: { date?: string | Date }): Promise<void>`
+### `executeChoice(choice: string | { id: string }, variables?: {[key: string]: any}, options?: { date?: string | Date }): Promise<void>`
 Executes another QuickAdd choice programmatically. This is a one-way trigger: it passes variables into the target choice, waits for that choice to finish, and resolves with `undefined`. It does not return data from the target choice to the caller. After the target choice finishes, QuickAdd clears the temporary variable map used by that API execution. If you call it from inside a Macro script, do not expect the caller's current `params.variables` values to still be available afterward unless you saved or restored them yourself.
 
 For the Macro data-flow implications, see [`executeChoice` is a trigger](/docs/VariablesDataFlow/#executechoice-is-a-trigger).
 
+**Cancellation:** If the target choice is cancelled or aborted, for example because you pressed Escape at one of its prompts, the promise rejects with `MacroAbortError`, and an uncaught rejection stops your script. If no choice has that name or id, QuickAdd reports an error and the promise resolves.
+
 **Parameters:**
-- `choiceName`: Name of the choice to execute
+- `choice`: The choice's name, or `{ id }` with the choice's id. A name runs the first choice with that name, in the order the settings list shows them. An id still works after the user renames the choice, so store the id if your code runs the same choice later. `pickChoice` and `getChoice` return it.
 - `variables`: (Optional) Variables to pass to the choice
 - `options.date`: (Optional) The day `{{DATE}}` should use. Pass a `Date`,
   `last week`, or `"ask"` if you want the picker.
@@ -429,6 +450,9 @@ await quickAddApi.executeChoice("Create Meeting Note", {
 });
 
 await quickAddApi.executeChoice("Weekly review", {}, { date: "lw" });
+
+// Run a choice by the id you stored
+await quickAddApi.executeChoice({ id: choiceId }, { value: "Main agenda content" });
 ```
 
 Batch processing example:
@@ -444,6 +468,35 @@ for (const contact of contacts) {
         contactEmail: contact.email,
         contactCompany: contact.company
     });
+}
+```
+
+### `getChoice(choice: string | { id: string }): { id: string; name: string; type: "Template" | "Capture" | "Macro" | "Multi"; path: string[] } | null`
+Looks up a choice without running it. Pass the choice's name or `{ id }`. A name returns the first choice with that name, in the order the settings list shows them. `path` lists the folder names from the top level down, with the choice's own name last. If no choice matches, `getChoice` returns `null` and shows no notice.
+
+**Example:**
+```javascript
+const choice = quickAddApi.getChoice({ id: choiceId });
+if (choice === null) {
+    // The user deleted the choice.
+}
+```
+
+### `pickChoice(options?: { placeholder?: string }): Promise<{ id: string; name: string; type: "Template" | "Capture" | "Macro"; path: string[] }>`
+Opens the picker that **QuickAdd: Run** opens and resolves with the choice the user picks. The picked choice does not run. Folders open as they do in **QuickAdd: Run**, and only a Template, Capture, or Macro can be picked. Typing searches the choices inside folders too and shows each one's folder, whatever **Search nested choices** is set to. The result has the same shape as `getChoice` returns.
+
+**Cancellation:** If the user closes the picker, the promise rejects with a cancellation. If there are no choices to pick, QuickAdd shows the same notice as **QuickAdd: Run**, opens nothing, and the promise rejects with a cancellation.
+
+**Parameters:**
+- `options.placeholder`: (Optional) The hint in the empty search field. The default is "Select a choice".
+
+**Example:**
+```javascript
+try {
+    const choice = await quickAddApi.pickChoice({ placeholder: "Choose a capture choice" });
+    settings.choiceId = choice.id;
+} catch {
+    // The user closed the picker.
 }
 ```
 
@@ -466,6 +519,39 @@ Applies a template to the active note without creating a new file. The template 
 await quickAddApi.applyTemplateToActiveFile("templates/meeting.md", {
     mode: "top"
 });
+```
+
+## Packages
+
+### `importPackage(packageJson: string): Promise<{ addedChoiceIds: string[]; skippedChoiceIds: string[]; writtenAssets: string[]; skippedAssets: string[] }>`
+Imports a [package](/docs/Choices/Packages/) without the **Import package** review, so your plugin can install a ready-made workflow it ships. `packageJson` is the text of a `.quickadd.json` package. QuickAdd adds only what the vault doesn't have yet. It skips a choice whose id is already in the vault and a file that already exists, and never overwrites them, so a second import of the same package changes nothing. QuickAdd registers the commands of the imported choices right away, and the promise resolves after QuickAdd saves its settings.
+
+If `packageJson` isn't a valid package, or the package can run code or runs a choice when Obsidian starts, the promise rejects and nothing changes. This API can't import such a package. The user can review and import it with **Import package…** in QuickAdd's settings, or review it with `quickadd:package-preview path=<file>` and import it with `quickadd:package-import path=<file> acknowledge=true`, where `<file>` is the package's path in the vault.
+
+**Example:**
+```javascript
+const { addedChoiceIds, skippedChoiceIds } = await quickAddApi.importPackage(packageJson);
+const choice = quickAddApi.getChoice({ id: "my-plugin-capture" });
+```
+
+## Formatting
+
+### `format(input: string, variables?: {[key: string]: any}, shouldClearVariables?: boolean): Promise<string>`
+Runs QuickAdd [format syntax](/docs/FormatSyntax/) on a string and resolves to the result. Tokens that need an answer, such as `{{VALUE:title}}` without a value, prompt for it.
+
+**Parameters:**
+- `input`: Text with format syntax
+- `variables`: (Optional) Values for named tokens, such as `{ title: "My Document" }` for `{{VALUE:title}}`
+- `shouldClearVariables`: (Optional, default `true`) When `true`, `params.variables` is left as `format` found it: the values you pass and the answers to its prompts are gone once it returns or rejects. Pass `false` to keep them for later steps.
+
+**Returns:** Promise resolving to the formatted text. Cancelling one of its prompts rejects with `MacroAbortError`.
+
+**Example:**
+```javascript
+const line = await quickAddApi.format(
+    "Today is {{DATE}} and the title is {{VALUE:title}}",
+    { title: "My Document" }
+);
 ```
 
 ## Utility Module
@@ -554,7 +640,7 @@ Sends a prompt to an AI model and returns the response.
 
 **Parameters:**
 - `prompt`: The prompt text
-- `model`: Model identifier. The model must be configured in QuickAdd's AI Assistant settings, under Edit providers. Accepts:
+- `model`: Model identifier. The model must be configured under one of the providers in **Settings → QuickAdd → AI Assistant**. Accepts:
   - A model name string, e.g. `"gpt-4o"`. Resolves to the first provider that serves it.
   - A provider-qualified string, e.g. `"openai/gpt-4o"`, where the prefix is a provider's stable ID (shown in the provider's edit form) or display name. Use this when two providers serve the same model name. If a provider literally serves a model whose id IS the whole string (OpenRouter's `openai/gpt-4o`, for example), that literal model wins - use the object form to override.
   - An object, e.g. `{name: "gpt-4o", provider: "openai"}`. With `provider` set, the lookup is scoped to exactly that provider and cannot be shadowed by literal slash-named models.
@@ -603,7 +689,7 @@ const result = await quickAddApi.ai.prompt(
 );
 ```
 
-**Note:** For newer models like `gpt-4o` or custom provider models, add them under Edit providers in QuickAdd's AI Assistant settings. Some providers support auto-sync to automatically update available models.
+**Note:** For newer models like `gpt-4o` or custom provider models, add them to the provider in **Settings → QuickAdd → AI Assistant**. Some providers support auto-sync to automatically update available models.
 
 ### `chunkedPrompt(text: string, promptTemplate: string, model: string | {name: string, provider?: string}, settings?: object): Promise<object>`
 Splits `text` into chunks, runs `promptTemplate` once per chunk, and joins the
@@ -695,6 +781,9 @@ const { text, steps, toolCalls } = await agent.generate({
 - `system` - system prompt (defaults to your AI Assistant default system prompt).
 - `tools` - an object map of tool name → tool (from `ai.tool()` and/or `ai.tools.*`).
 - `toolChoice` - `"auto"` (default) | `"none"` | `"required"` | `{ type: "tool", toolName }`.
+  Some models can't be forced to call a tool: Claude Opus 5.5 and Claude Fable 5.1 reject
+  `"required"` and `{ type: "tool", toolName }`, and QuickAdd's error says so. Use
+  `"auto"` and say in the prompt when the tool applies, or pass a `schema` for a fixed JSON shape.
 - `stopWhen` - one or more stop conditions from `ai.stepCountIs(n)` / `ai.hasToolCall(name)`.
 - `maxSteps` - step budget (default 20, hard cap 100). Sugar for `stopWhen: ai.stepCountIs(n)`.
 - `maxOutputTokens`, `modelOptions` - passed to the provider.
@@ -788,10 +877,18 @@ GPT-4o-class), Anthropic Claude 4.x, and Gemini 3.x; it can be combined with too
 that do not support schema-constrained output (e.g. legacy OpenAI chat models) reject the request
 outright with a provider error - use a current model rather than expecting a best-effort fallback.
 
-:::note[OpenAI reasoning models (GPT-5.x, o-series)]
-These accept only the default `temperature` (omit it from `modelOptions`), and QuickAdd
-automatically sends `maxOutputTokens` as `max_completion_tokens` for them. The agent's default
-path sets neither, so `quickAddApi.ai.agent({ model: "gpt-5" })` works as-is.
+:::note[OpenAI reasoning models (GPT-5.x, GPT-6, o-series)]
+These accept only the default `temperature` (omit it from `modelOptions`). The agent sends no
+`temperature` unless you set one, so `quickAddApi.ai.agent({ model: "gpt-6-luna" })` works as-is.
+
+Agent turns to OpenAI's own API (`https://api.openai.com/v1`) use the Responses API, which lets
+reasoning models such as GPT-5.6 and GPT-6 call tools with reasoning on. Other OpenAI-compatible
+providers use Chat Completions. If a gateway there (Azure OpenAI, OpenRouter, LiteLLM, ...) rejects
+a tool turn because the model reasons by default, QuickAdd retries it once with
+`reasoning_effort: "none"`, unless you set `reasoning_effort` yourself. `modelOptions` keep their Chat Completions names either way:
+QuickAdd sends `reasoning_effort` as `reasoning.effort` and `max_tokens` as `max_output_tokens`
+on the Responses API, and sends `maxOutputTokens` as `max_completion_tokens` to reasoning models
+on Chat Completions.
 :::
 
 ### `getModels(): string[]`
@@ -1106,7 +1203,6 @@ module.exports = async (params) => {
     
     const priority = await quickAddApi.suggester(
         ["🔴 High", "🟡 Medium", "🟢 Low"],
-        await quickAddApi.fieldSuggestions.getFieldValues("priority") || 
         ["high", "medium", "low"]
     );
     

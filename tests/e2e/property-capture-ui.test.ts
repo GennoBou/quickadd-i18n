@@ -1,3 +1,4 @@
+import { POLL_OPTS, waitForElement, typeInto as insertText, pressKey, expectNoPrompt } from "./uiHelpers";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ObsidianClient } from "obsidian-e2e";
 import { CaptureChoice } from "../../src/types/choices/CaptureChoice";
@@ -8,7 +9,6 @@ import { NestedChoiceCommand } from "../../src/types/macros/QuickCommands/Nested
 import { createQuickAddE2EHarness, seedVaultFile } from "./e2eVault";
 
 const getContext = createQuickAddE2EHarness("property-capture-ui");
-const POLL_OPTS = { timeout: 10_000, interval: 200 };
 const BODY = "\n# Project\n\nKeep the body unchanged.\n";
 const NUMBER_INPUT = '.qaInputPrompt input[type="number"]';
 const TEXT_INPUT = '.qaInputPrompt input[type="text"], .qaInputPrompt textarea';
@@ -16,47 +16,12 @@ const PROPERTY_INPUT = '.prompt input[placeholder="Property"]';
 
 type QuickAddData = { choices: IChoice[]; onePageInputEnabled: boolean };
 
-async function waitForElement(obsidian: ObsidianClient, selector: string) {
-	await expect.poll(() => obsidian.dev.evalJson<boolean>(
-		`Boolean(document.querySelector(${JSON.stringify(selector)})?.getClientRects().length)`,
-	), POLL_OPTS).toBe(true);
-}
-
-async function pressKey(obsidian: ObsidianClient, key: "Enter" | "Escape" | "F8", modified = false) {
-	const mod = (await obsidian.dev.evalJson<string>("process.platform")) === "darwin" ? 4 : 2;
-	const codes = { Enter: 13, Escape: 27, F8: 119 };
-	for (const type of ["keyDown", "keyUp"]) {
-		await obsidian.exec("dev:cdp", {
-			method: "Input.dispatchKeyEvent",
-			params: JSON.stringify({
-				type, key, code: key, windowsVirtualKeyCode: codes[key],
-				modifiers: modified ? mod | (key === "F8" ? 8 : 0) : 0,
-			}),
-		});
-	}
-}
-
 async function typeInto(obsidian: ObsidianClient, selector: string, text: string) {
 	await waitForElement(obsidian, selector);
-	expect(await obsidian.dev.evalJson<boolean>(`(() => {
-		const input = document.querySelector(${JSON.stringify(selector)});
-		if (!(input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement)) return false;
-		input.focus();
-		input.select();
-		return true;
-	})()`)).toBe(true);
-	await obsidian.exec("dev:cdp", {
-		method: "Input.insertText", params: JSON.stringify({ text }),
-	});
+	await insertText(obsidian, selector, text);
 	await expect.poll(() => obsidian.dev.evalJson<string>(
 		`document.querySelector(${JSON.stringify(selector)})?.value ?? ""`,
 	), POLL_OPTS).toBe(text);
-}
-
-async function expectNoPrompt(obsidian: ObsidianClient) {
-	await expect.poll(() => obsidian.dev.evalJson<boolean>(
-		'Boolean(document.querySelector(".modal-container, .prompt"))',
-	), POLL_OPTS).toBe(false);
 }
 
 async function closeOpenPrompts() {
@@ -78,7 +43,7 @@ function choiceFor(name: string, path: string, property: string) {
 	choice.onePageInput = "never";
 	choice.useSelectionAsCaptureValue = false;
 	choice.propertyCapture = {
-		property: { kind: "named", format: property }, action: "set", createIfMissing: true,
+		property: { kind: "named", format: property }, action: "set", createIfMissing: true, sort: "none",
 	};
 	return choice;
 }
@@ -162,7 +127,7 @@ describe("property capture through native keyboard prompts", () => {
 		const path = await seedVaultFile(obsidian, sandbox, "runtime-list.md", `---\ntags: [original]\nstatus: active\n---\n${BODY}`);
 		const choice = choiceFor("Choose a property then capture", path, "unused");
 		choice.onePageInput = "always";
-		choice.propertyCapture = { property: { kind: "prompt" }, action: "set", createIfMissing: false };
+		choice.propertyCapture = { property: { kind: "prompt" }, action: "set", createIfMissing: false, sort: "none" };
 		await saveChoice(choice, true);
 		await obsidian.exec("command", { id: `quickadd:choice:${choice.id}` });
 		await waitForElement(obsidian, PROPERTY_INPUT);
@@ -241,7 +206,7 @@ describe("property capture through native keyboard prompts", () => {
 		capture.useSelectionAsCaptureValue = false;
 		capture.format = { enabled: true, format: "{{VALUE:state}}" };
 		capture.propertyCapture = {
-			property: { kind: "named", format: "status" }, action: "set", createIfMissing: false,
+			property: { kind: "named", format: "status" }, action: "set", createIfMissing: false, sort: "none",
 		};
 		const macro = new MacroChoice("Append project owner and update status");
 		macro.command = true;

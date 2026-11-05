@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { App } from "obsidian";
 import { Notice, TFile } from "obsidian";
@@ -11,6 +12,7 @@ import {
 	writeTextToClipboard,
 } from "./fileLinks";
 import type { AppendLinkOptions, LinkPlacement } from "../types/linkPlacement";
+import { mapEditorCursorPlacement, type EditorTextMutation } from "./editorCursorPlacement";
 
 type NoticeTestClass = typeof Notice & {
 	instances: Array<{ message: string; timeout?: number }>;
@@ -55,6 +57,7 @@ function makeDestinationApp(files: TFile[], contents: Map<string, string>): App 
 				contents.set(file.path, change(contents.get(file.path) ?? ""));
 			}),
 		},
+		workspace: { getActiveViewOfType: vi.fn(() => null), getLeavesOfType: vi.fn(() => []) },
 		fileManager: {
 			generateMarkdownLink: vi.fn((file: TFile, sourcePath: string) => {
 				return `[[${sourcePath}->${file.path}]]`;
@@ -392,6 +395,22 @@ describe("file link helpers", () => {
 		expect(contents.get("Indexes/MOC.md")).toBe(
 			"# Index\n[[Indexes/MOC.md->Notes/New.md]]",
 		);
+	});
+
+	it("keeps an end-of-note cursor before a link appended to the specified file", async () => {
+		const contents = new Map([["Notes/New.md", "Before"]]);
+		const file = makeFile("Notes/New.md");
+		const app = makeDestinationApp([file], contents);
+		const cursor = { content: "Before", offsets: [6] };
+		const observer = vi.fn((mutation: EditorTextMutation) => {
+			expect(contents.get(file.path)).toBe(mutation.after);
+			expect(mapEditorCursorPlacement(cursor, mutation)).toEqual({
+				content: "Before\n[[Notes/New.md->Notes/New.md]]", offsets: [6],
+			});
+		});
+
+		await appendFileLinkToDestinationFile(app, file, specifiedLinkOptions(file.path), observer);
+		expect(observer).toHaveBeenCalledOnce();
 	});
 
 	it("throws when the destination file is missing", async () => {

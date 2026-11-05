@@ -1,13 +1,11 @@
-import type { App, TFile } from "obsidian";
+import type { App, MarkdownView, TFile } from "obsidian";
 import { getFrontMatterInfo, parseYaml } from "obsidian";
 import type { IChoiceExecutor } from "../IChoiceExecutor";
 import { log } from "../logger/logManager";
 import type QuickAdd from "../main";
 import type ITemplateChoice from "../types/choices/ITemplateChoice";
-import {
-	getMarkdownEditorViewForFile,
-	templaterParseTemplate,
-} from "../utilityObsidian";
+import { getMarkdownEditorViewForFile, insertCaptureInBoundEditor } from "../utils/editorInsertion";
+import { templaterParseTemplate } from "../utils/templaterIntegration";
 import {
 	assignFrontmatterValue,
 	hasUnsafeFrontmatterKey,
@@ -16,10 +14,13 @@ import invariant from "../utils/invariant";
 import { TemplatePropertyCollector } from "../utils/TemplatePropertyCollector";
 import { coerceYamlValue } from "../utils/yamlValues";
 import { parentFolderPath } from "../utils/pathUtils";
-import { insertAtNoteBodyStart } from "../utils/noteContentInsertion";
+import { insertAtNoteBodyStartWithResult, type NoteBodyInsertionResult } from "../utils/noteContentInsertion";
+import { processNote, processNoteFrontMatter } from "../utils/noteContent";
+import { prepareTemplateContent } from "../utils/templateCursorPlacement";
 import { TemplateEngine } from "./TemplateEngine";
 import { normalizeGeneratedFilePath } from "../utils/generatedFilePath";
 import { isSetLikeObsidianProperty } from "../utils/obsidianPropertyTypes";
+import { restoreUserTextAt } from "../formatters/helpers/userText";
 
 export const templateInsertModes = [
 	{
@@ -70,12 +71,20 @@ export function splitTemplateFrontmatter(content: string): {
 	};
 }
 
+/** Blank lines (spaces and tabs allowed) at the end of a note. */
+const TRAILING_BLANK_LINES = /(?:\r?\n[^\S\r\n]*)+$/;
+/** Blank lines at the start of a template body. */
+const LEADING_BLANK_LINES = /^(?:[^\S\r\n]*\r?\n)+/;
+
 /**
- * Inserts a template body into existing note content. "top" is
+ * Inserts a template body into existing note content. "bottom" leaves exactly
+ * one blank line between the note and the template, however the note ends, and
+ * none above the template in an empty note (#1958). Callers drop the body's own
+ * leading blank lines first (see insertTemplateIntoFile). "top" is
  * frontmatter-aware: the body lands below the note's frontmatter block, including
  * the blank line that separates that block from the body (issue #1538).
  *
- * The "top" branch reuses the shared, fence-safe `insertAtNoteBodyStart`
+ * The "top" branch reuses the shared, fence-safe `insertAtNoteBodyStartWithResult`
  * (src/utils/noteContentInsertion.ts). Appending a newline to the body expresses
  * the template-apply policy that the inserted block always ends on its own line —
  * leaving a blank-line separation from the existing content when the body itself
@@ -86,12 +95,15 @@ export function insertBodyIntoNoteContent(
 	noteContent: string,
 	body: string,
 	position: "top" | "bottom",
-): string {
+): NoteBodyInsertionResult {
 	if (position === "bottom") {
-		return `${noteContent}\n${body}`;
+		const note = noteContent.replace(TRAILING_BLANK_LINES, "");
+		const head = note.trim() ? `${note}\n\n` : "";
+		const content = head + body;
+		return { content, insertedStartOffset: head.length, insertedEndOffset: content.length };
 	}
 
-	return insertAtNoteBodyStart(noteContent, `${body}\n`);
+	return insertAtNoteBodyStartWithResult(noteContent, `${body}\n`);
 }
 
 function isEmptyFrontmatterValue(value: unknown): boolean {
@@ -165,6 +177,12 @@ export class TemplateInsertEngine extends TemplateEngine {
 	}
 
 	private resolvedTemplatePath: string | null;
+	private cursorView: MarkdownView | null = null;
+
+	public override placeCursor(file: TFile): void {
+		if (this.mode === "cursor" && getMarkdownEditorViewForFile(this.app, file) !== this.cursorView) return;
+		super.placeCursor(file);
+	}
 
 	public async run(): Promise<void> {
 		await this.apply();
@@ -187,6 +205,7 @@ export class TemplateInsertEngine extends TemplateEngine {
 	}
 
 	public async apply(): Promise<TFile | null> {
+		this.cursorPlacement = null;
 		invariant(
 			this.templatePath,
 			"Cannot apply template: no template path given.",
@@ -305,20 +324,34 @@ export class TemplateInsertEngine extends TemplateEngine {
 	): Promise<TFile> {
 		const { formatted, templatePropertyVars } =
 			await this.formatTemplateForTargetFile();
-		const { frontmatterYaml, body } = splitTemplateFrontmatter(formatted);
+		const split = splitTemplateFrontmatter(formatted);
+		const { frontmatterYaml } = split;
+		// At the bottom, the one blank line above the template replaces the
+		// template's own leading blank lines, such as the one after its frontmatter.
+		const body = position === "bottom" ? split.body.replace(LEADING_BLANK_LINES, "") : split.body;
 
-		if (body.trim().length > 0) {
-			// vault.process is Obsidian's atomic read-modify-write; the docs recommend
-			// it over read+modify, and it reads fresh from disk (unlike cachedRead).
-			await this.app.vault.process(this.targetFile, (noteContent) =>
-				insertBodyIntoNoteContent(noteContent, body, position),
-			);
+		const cursor = this.cursorPlacement;
+		if (body.trim().length > 0 || cursor) {
+			await processNote(this.app, this.targetFile, (noteContent) => {
+				const inserted = insertBodyIntoNoteContent(noteContent, body, position);
+				if (cursor && inserted.insertedStartOffset !== null) {
+					const blockStart = inserted.insertedStartOffset;
+					const start = blockStart - (formatted.length - body.length);
+					this.cursorPlacement = {
+						content: inserted.content,
+						// A cursor in a dropped blank line goes to the start of the template.
+						offsets: cursor.offsets.map(offset => Math.max(blockStart, start + offset)),
+					};
+				}
+				return inserted.content;
+			});
 		}
 
 		await this.mergeFrontmatterProperties(
 			frontmatterYaml,
 			templatePropertyVars,
 		);
+		await this.rebaseCursorAfterFileChanges(this.targetFile);
 		return this.targetFile;
 	}
 
@@ -329,18 +362,34 @@ export class TemplateInsertEngine extends TemplateEngine {
 			"Cannot insert at cursor: the note is not open in the active editor.",
 		);
 
+		this.cursorView = view;
+		const editor = view.editor;
 		const { formatted, templatePropertyVars } =
 			await this.formatTemplateForTargetFile();
+		invariant(
+			view.file === this.targetFile && view.editor === editor &&
+				this.app.workspace.getLeavesOfType("markdown").some(leaf => leaf.view === view),
+			"Cannot insert at cursor: the original editor was closed or changed notes.",
+		);
 		const { frontmatterYaml, body } = splitTemplateFrontmatter(formatted);
 
-		if (body.trim().length > 0) {
-			view.editor.replaceSelection(body);
+		const offset = this.cursorPlacement?.offsets[0];
+		if (offset !== undefined) {
+			this.cursorPlacement = insertCaptureInBoundEditor({
+				content: body,
+				cursor: { kind: "offset", value: offset - (formatted.length - body.length), source: "marker" },
+			}, editor, "currentLine");
+		} else if (body.trim().length > 0) {
+			editor.replaceSelection(body);
 		}
 
+		// Cursor rebasing reads the saved body after the frontmatter merge.
+		if (this.cursorPlacement && frontmatterYaml) await view.save();
 		await this.mergeFrontmatterProperties(
 			frontmatterYaml,
 			templatePropertyVars,
 		);
+		if (frontmatterYaml) await this.rebaseCursorAfterFileChanges(this.targetFile);
 		return this.targetFile;
 	}
 
@@ -358,7 +407,11 @@ export class TemplateInsertEngine extends TemplateEngine {
 
 		let formatted = await this.formatter.withTemplatePropertyCollection(() =>
 			this.formatter.withPromptScope("noteBody", templateContent, () =>
-				this.formatter.formatFileContent(templateContent),
+				this.formatter.withUserTextProtected(() =>
+					this.targetFile.extension === "md"
+						? this.formatter.formatTemplateContent(templateContent)
+						: this.formatter.formatFileContent(templateContent),
+				),
 			),
 		);
 		const templatePropertyVars =
@@ -372,7 +425,10 @@ export class TemplateInsertEngine extends TemplateEngine {
 			);
 		}
 
-		return { formatted, templatePropertyVars };
+		const marked = prepareTemplateContent(formatted);
+		const prepared = restoreUserTextAt(marked.content, marked.offsets);
+		this.cursorPlacement = this.targetFile.extension === "md" && prepared.offsets.length > 0 ? prepared : null;
+		return { formatted: prepared.content, templatePropertyVars };
 	}
 
 	/**
@@ -420,7 +476,8 @@ export class TemplateInsertEngine extends TemplateEngine {
 			}
 		}
 
-		await this.app.fileManager.processFrontMatter(
+		await processNoteFrontMatter(
+			this.app,
 			this.targetFile,
 			(frontmatter: Record<string, unknown>) => {
 				for (const [key, value] of Object.entries(parsed)) {

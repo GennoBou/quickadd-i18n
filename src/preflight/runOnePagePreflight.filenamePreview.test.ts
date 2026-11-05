@@ -41,21 +41,17 @@ vi.mock("./OnePageInputModal", () => ({
 
 vi.mock("src/quickAddSettingsTab", () => ({ QuickAddSettingsTab: class {} }));
 vi.mock("src/main", () => ({ __esModule: true, default: class {} }));
-vi.mock("obsidian-dataview", () => ({
-	__esModule: true,
-	getAPI: vi.fn().mockReturnValue(null),
+vi.mock("src/utils/vaultQueries", () => ({
+	getMarkdownFilesInFolder: vi.fn(() => []),
+	getMarkdownFilesWithTag: vi.fn(() => []),
+	isFolder: vi.fn(() => false),
 }));
-vi.mock("src/utilityObsidian", async () => {
+vi.mock("src/utils/userScript", () => ({
+	loadUserScript: vi.fn(),
+}));
+vi.mock("src/utils/templateFolderUtils", async () => {
 	const { TFile: TFileCls } = await import("obsidian");
-	const { getDate } = await import("src/utils/dates");
 	return {
-		getMarkdownFilesInFolder: vi.fn(() => []),
-		getMarkdownFilesWithTag: vi.fn(() => []),
-		getUserScript: vi.fn(),
-		isFolder: vi.fn(() => false),
-		// A configured folder can hold {{DATE:}}, which the requirement scan
-		// resolves through this helper; the preview renders {{DATE}} with it too.
-		getDate,
 		getTemplateFile: vi.fn((app: App, path: string) => {
 			const f = app.vault.getAbstractFileByPath(path);
 			return f instanceof TFileCls ? f : null;
@@ -116,11 +112,7 @@ const createChoice = (
 		setFileExistsBehavior: false,
 	}) as unknown as ITemplateChoice;
 
-const createExecutor = (): IChoiceExecutor => ({
-	...createChoiceExecutor(),
-	execute: vi.fn(),
-	variables: new Map<string, unknown>(),
-});
+const createExecutor = (): IChoiceExecutor => (createChoiceExecutor());
 
 const createPlugin = () =>
 	({
@@ -351,5 +343,19 @@ describe("the one-page preview follows the choice's Which day", () => {
 
 		const out = await computePreview!({ title: "Standup" });
 		expect(out[0].text).toBe("Daily/2026-08-21 Standup");
+	});
+
+	it("previews the day the caller handed the choice", async () => {
+		const executor = createExecutor();
+		executor.callerDay = new Date(2026, 2, 1);
+		await runOnePagePreflight(
+			createApp(),
+			createPlugin(),
+			executor,
+			withDateOrigin({ kind: "relative", offset: -1, unit: "days" }),
+		);
+
+		const out = await computePreview!({ title: "Standup" });
+		expect(out[0].text).toBe("Daily/2026-03-01 Standup");
 	});
 });

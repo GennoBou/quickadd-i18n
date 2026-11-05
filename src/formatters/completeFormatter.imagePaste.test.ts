@@ -11,7 +11,6 @@ import type { App, TFile } from "obsidian";
 
 const mocks = vi.hoisted(() => ({
 	inputPromptPrompt: vi.fn(),
-	inputPromptPromptWithContext: vi.fn(),
 	inputPromptFactory: vi.fn(),
 }));
 
@@ -21,9 +20,7 @@ vi.mock("obsidian", () => ({
 		path.replace(/\\/g, "/").replace(/\/+/g, "/"),
 }));
 
-vi.mock("../utilityObsidian", () => ({
-	templaterParseTemplate: vi.fn().mockResolvedValue(null),
-}));
+vi.mock("../utils/templaterIntegration", async () => (await import("../../tests/helpers/formatters/mocks")).templaterIntegrationMock());
 
 vi.mock("../gui/InputPrompt", () => ({
 	__esModule: true,
@@ -32,7 +29,6 @@ vi.mock("../gui/InputPrompt", () => ({
 			mocks.inputPromptFactory(inputTypeOverride);
 			return {
 				Prompt: mocks.inputPromptPrompt,
-				PromptWithContext: mocks.inputPromptPromptWithContext,
 			};
 		}
 	},
@@ -40,43 +36,23 @@ vi.mock("../gui/InputPrompt", () => ({
 
 vi.mock("src/gui/GenericInputPrompt/GenericInputPrompt", () => ({
 	__esModule: true,
-	default: { PromptWithContext: vi.fn().mockResolvedValue("") },
+	default: { Prompt: vi.fn().mockResolvedValue("") },
 }));
 
-vi.mock("src/gui/InputSuggester/inputSuggester", () => ({
-	__esModule: true,
-	default: { Suggest: vi.fn().mockResolvedValue("") },
-}));
+vi.mock("src/gui/InputSuggester/inputSuggester", async () => (await import("../../tests/helpers/formatters/mocks")).genericSuggesterMock());
 
 vi.mock("src/gui/MultiSuggester/multiSuggester", () => ({
 	__esModule: true,
 	default: { Suggest: vi.fn().mockResolvedValue([]) },
 }));
 
-vi.mock("src/gui/VDateInputPrompt/VDateInputPrompt", () => ({
-	__esModule: true,
-	default: { Prompt: vi.fn().mockResolvedValue("") },
-}));
+vi.mock("src/gui/VDateInputPrompt/VDateInputPrompt", async () => (await import("../../tests/helpers/formatters/mocks")).VDateInputPromptMock());
 
-vi.mock("../gui/GenericSuggester/genericSuggester", () => ({
-	__esModule: true,
-	default: { Suggest: vi.fn().mockResolvedValue("") },
-}));
+vi.mock("../gui/GenericSuggester/genericSuggester", async () => (await import("../../tests/helpers/formatters/mocks")).genericSuggesterMock());
 
-vi.mock("../gui/MathModal", () => ({
-	__esModule: true,
-	MathModal: { Prompt: vi.fn().mockResolvedValue("") },
-}));
+vi.mock("../gui/MathModal", async () => (await import("../../tests/helpers/formatters/mocks")).MathModalMock());
 
-vi.mock("../engine/SingleInlineScriptEngine", () => ({
-	__esModule: true,
-	SingleInlineScriptEngine: class {
-		public params = { variables: {} as Record<string, unknown> };
-		async runAndGetOutput() {
-			return "";
-		}
-	},
-}));
+vi.mock("../engine/SingleInlineScriptEngine", async () => (await import("../../tests/helpers/formatters/mocks")).SingleInlineScriptEngineMock());
 
 vi.mock("../engine/SingleMacroEngine", () => ({
 	__esModule: true,
@@ -105,14 +81,7 @@ vi.mock("../engine/SingleTemplateEngine", () => ({
 	},
 }));
 
-vi.mock("obsidian-dataview", () => ({
-	__esModule: true,
-	getAPI: vi.fn().mockReturnValue(null),
-}));
-
-vi.mock("../logger/logManager", () => ({
-	log: { logError: vi.fn(), logWarning: vi.fn(), logMessage: vi.fn() },
-}));
+vi.mock("../logger/logManager", async () => (await import("../../tests/helpers/formatters/mocks")).logManagerMock());
 
 import { CompleteFormatter } from "./completeFormatter";
 import { CaptureChoiceFormatter } from "./captureChoiceFormatter";
@@ -151,7 +120,6 @@ function lastPromptOptions(mock: ReturnType<typeof vi.fn>) {
 
 beforeEach(() => {
 	mocks.inputPromptPrompt.mockReset().mockResolvedValue("typed");
-	mocks.inputPromptPromptWithContext.mockReset().mockResolvedValue("typed");
 	mocks.inputPromptFactory.mockReset();
 	Object.defineProperty(globalThis, "navigator", {
 		value: { clipboard: { readText: vi.fn().mockResolvedValue("") } },
@@ -232,13 +200,10 @@ describe("image paste sink-context gating", () => {
 
 		await f.formatContentOnly("{{VALUE}}");
 
-		// Capture value prompts route through PromptWithContext because a
-		// link source path exists; options stay the 6th argument.
-		const options =
-			mocks.inputPromptPromptWithContext.mock.calls.at(-1)?.[6] ??
-			lastPromptOptions(mocks.inputPromptPrompt);
+		const options = lastPromptOptions(mocks.inputPromptPrompt);
 		expect(options?.imagePaste).toEqual({
 			sourcePath: "Journal/2026-07-06.md",
 		});
+		expect(options?.linkSourcePath).toBe("Journal/2026-07-06.md");
 	});
 });

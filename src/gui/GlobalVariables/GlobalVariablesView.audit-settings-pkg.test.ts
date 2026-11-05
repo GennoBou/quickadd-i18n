@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/svelte";
 import { flushSync } from "svelte";
@@ -164,5 +165,23 @@ describe("GlobalVariablesView mid-edit persistence (audit)", () => {
 		const keys = Object.keys(settingsStore.getState().globalVariables);
 		expect(keys).toContain("spaced");
 		expect(keys).not.toContain("  spaced  ");
+	});
+
+	it("keeps an edit made just before Settings closes", async () => {
+		settingsStore.setState({ globalVariables: { greeting: "hello" } });
+
+		const { container, unmount } = render(GlobalVariablesView, {
+			props: { app: appWithSuggestSupport(), plugin: fakePlugin() },
+		});
+
+		const valueTextarea = getValueTextareas(container)[0];
+		valueTextarea.value = "hello world";
+		await fireEvent.input(valueTextarea);
+		// Settings closes within the 200ms debounce.
+		unmount();
+
+		expect(settingsStore.getState().globalVariables).toEqual({
+			greeting: "hello world",
+		});
 	});
 });

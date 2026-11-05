@@ -33,8 +33,8 @@ export const fileExistsBehaviorCategoryOptions = [
 ];
 
 export type FileExistsBehaviorCategoryId =
-	"prompt" | "update" | "create" | "keep";
-export type FileExistsModeCategoryId = Exclude<
+	(typeof fileExistsBehaviorCategoryOptions)[number]["id"];
+type FileExistsModeCategoryId = Exclude<
 	FileExistsBehaviorCategoryId,
 	"prompt"
 >;
@@ -101,22 +101,36 @@ export const fileExistsModes = [
 		resolutionKind: "createNew" as const,
 	},
 	{
+		// Saved choices store this id from when it was the only keep mode, so it
+		// keeps its id and its behavior: it opens the note even with Open off.
 		id: "doNothing" as const,
+		category: "keep" as const,
+		get label() {
+			return t("Open existing file");
+		},
+		get description() {
+			return t("Leaves the existing file unchanged and opens it, even when Open is off.");
+		},
+		requiresExistingFile: true,
+		resolutionKind: "reuseExisting" as const,
+		opensExistingFile: true as const,
+	},
+	{
+		id: "leaveUnchanged" as const,
 		category: "keep" as const,
 		get label() {
 			return t("Do nothing");
 		},
 		get description() {
-			return t("Leaves the file unchanged and opens the existing file.");
+			return t("Leaves the existing file unchanged. It opens only when Open is on.");
 		},
 		requiresExistingFile: true,
 		resolutionKind: "reuseExisting" as const,
+		opensExistingFile: false as const,
 	},
 ];
 
 export type FileExistsModeId = (typeof fileExistsModes)[number]["id"];
-export type FileExistsResolutionKind =
-	(typeof fileExistsModes)[number]["resolutionKind"];
 export type FileExistsModeDefinition = (typeof fileExistsModes)[number];
 export type TemplateFileExistsBehavior =
 	| { kind: "prompt" }
@@ -177,6 +191,7 @@ const legacyFileExistsModeMap: Record<string, FileExistsModeId> = {
 	increment: "increment",
 	duplicateSuffix: "duplicateSuffix",
 	doNothing: "doNothing",
+	leaveUnchanged: "leaveUnchanged",
 };
 
 const createNewPathResolvers: Record<
@@ -201,24 +216,17 @@ export function getModesForCategory(
 	return fileExistsModes.filter((mode) => mode.category === category);
 }
 
-export function getCategoryForMode(
+function getCategoryForMode(
 	modeId: FileExistsModeId,
 ): FileExistsModeCategoryId {
 	return getFileExistsMode(modeId).category;
 }
 
+// The prompt's Do nothing item used to open the note, so its slot now reads Open
+// existing file with the same behavior. Leaving the note alone from the prompt is
+// what Escape already does.
 export function getPromptModes(): FileExistsModeDefinition[] {
-	return [...fileExistsModes];
-}
-
-export function getBehaviorCategory(
-	behavior: TemplateFileExistsBehavior,
-): FileExistsBehaviorCategoryId {
-	if (behavior.kind === "prompt") {
-		return "prompt";
-	}
-
-	return getCategoryForMode(behavior.mode);
+	return fileExistsModes.filter((mode) => mode.id !== "leaveUnchanged");
 }
 
 export function getDefaultBehaviorForCategory(

@@ -2,7 +2,6 @@ import type { FuzzyMatch } from "obsidian";
 import {
 	Component,
 	FuzzySuggestModal,
-	MarkdownRenderer,
 	Notice,
 	prepareFuzzySearch,
 	setIcon,
@@ -13,8 +12,9 @@ import { MultiChoice } from "../../types/choices/MultiChoice";
 import type IMultiChoice from "../../types/choices/IMultiChoice";
 import type QuickAdd from "../../main";
 import type { IChoiceExecutor } from "../../IChoiceExecutor";
+import type { ChoiceChain } from "../../engine/choiceChain";
 import { createRenderFallbackWarner } from "./utils";
-import { reportUnlessCancelled } from "../../utils/errorUtils";
+import { isCancellationError, reportUnlessCancelled, toError } from "../../utils/errorUtils";
 import { promptCancelled } from "../../errors/UserCancelError";
 import { settingsStore } from "../../settingsStore";
 import {
@@ -31,6 +31,7 @@ import {
 } from "../../engine/runTemplateFromFolder";
 import { resolveChoiceIcon } from "../../utils/choiceUtils";
 import { createOwnedElement } from "../../utils/activeWindow";
+import { renderChoiceName } from "../choiceList/renderChoiceName";
 
 const backLabel = "← Back";
 
@@ -62,7 +63,7 @@ export function emptyFolderNoticeText(folder: IChoice): string {
  * settings tree already uses for this exact state ("Empty — add a choice or drag
  * one here.", ChoiceList.svelte), so the two surfaces name it the same way.
  */
-export const EMPTY_FOLDER_FLAIR = "Empty";
+const EMPTY_FOLDER_FLAIR = "Empty";
 
 /**
  * The same marker for a folder the picker cannot drill into because its contents
@@ -70,7 +71,7 @@ export const EMPTY_FOLDER_FLAIR = "Empty";
  * contradict the settings list, which says the contents are still in data.json
  * (#1566).
  */
-export const UNREADABLE_FOLDER_FLAIR = "Unreadable";
+const UNREADABLE_FOLDER_FLAIR = "Unreadable";
 
 /** The trailing marker for a folder row that cannot be opened, or "" for one that can. */
 export function folderFlairFor(choice: IChoice): string {
@@ -180,7 +181,21 @@ type ChoiceSuggesterOptions = {
 	 * picker is open (#1630). Absent for the top-level launcher, which has no
 	 * caller waiting and stays fire-and-forget.
 	 */
-	completion?: (error?: unknown) => void;
+	completion?: (error?: Error) => void;
+	/**
+	 * Chain of the folder run that opened this picker, so the picked choice runs
+	 * inside it. Set with `completion` by ChoiceExecutor's Multi path; absent for
+	 * the top-level launcher.
+	 */
+	ancestry?: ChoiceChain;
+	/**
+	 * Pick mode, for the API's pickChoice: a picked Template, Capture or Macro is
+	 * handed here and nothing runs. Folders still open, and typing searches nested
+	 * choices whatever Search nested choices says, since the caller wants any leaf.
+	 * Threaded through folder levels like `completion`, which still settles a
+	 * dismissal.
+	 */
+	onPick?: (choice: IChoice) => void;
 };
 
 /**
@@ -208,6 +223,8 @@ export default class ChoiceSuggester extends FuzzySuggestModal<IChoice> {
 	private placeholderStack: Array<string | undefined> = [];
 	private currentPlaceholder?: string;
 	private readonly completion?: ChoiceSuggesterOptions["completion"];
+	private readonly ancestry?: ChoiceChain;
+	private readonly onPick?: ChoiceSuggesterOptions["onPick"];
 	/**
 	 * Set the moment an activation is accepted (selectSuggestion, BEFORE the
 	 * modal closes), so onClose can tell a dismissal from a pick:
@@ -244,6 +261,8 @@ export default class ChoiceSuggester extends FuzzySuggestModal<IChoice> {
 		options?: ChoiceSuggesterOptions
 	) {
 		super(plugin.app);
+		// `qa-choice-suggester` is a stable hook for user CSS snippets (see SuggesterModal).
+		this.modalEl.addClass("qa-choice-suggester");
 		// Initialize here (not as a field initializer) so the `plugin` parameter
 		// property is already assigned; a field initializer runs before it.
 		this.choiceExecutor =
@@ -261,6 +280,8 @@ export default class ChoiceSuggester extends FuzzySuggestModal<IChoice> {
 				: { activeFile: this.app.workspace.getActiveFile() };
 		this.placeholderStack = options?.placeholderStack ?? [];
 		this.completion = options?.completion;
+		this.ancestry = options?.ancestry;
+		this.onPick = options?.onPick;
 		// `currentPlaceholder` is what a nested level pushes onto the stack so Back
 		// can restore it, so it must hold the effective placeholder (including the
 		// default), not just an explicitly-passed one.
@@ -301,7 +322,8 @@ export default class ChoiceSuggester extends FuzzySuggestModal<IChoice> {
 
 	getSuggestions(query: string): FuzzyMatch<IChoice>[] {
 		const trimmed = query.trim();
-		if (!trimmed || !settingsStore.getState().searchNestedChoices) {
+		const searchNested = this.onPick !== undefined || settingsStore.getState().searchNestedChoices;
+		if (!trimmed || !searchNested) {
 			return super.getSuggestions(trimmed);
 		}
 
@@ -413,7 +435,7 @@ export default class ChoiceSuggester extends FuzzySuggestModal<IChoice> {
 				cls: "quickadd-choice-suggestion-title quickadd-choice-suggestion-text",
 			});
 		}
-		void MarkdownRenderer.render(this.app, item.item.name, nameEl, "", this.markdownComponent)
+		void renderChoiceName(item.item.name, nameEl, this.markdownComponent, this.app)
 			.catch((error) => {
 				nameEl.textContent = item.item.name;
 				// renderSuggestion runs per row and re-runs on every keystroke, so a
@@ -486,12 +508,12 @@ export default class ChoiceSuggester extends FuzzySuggestModal<IChoice> {
 	private settleCompletion(promise: Promise<void>, errorContext: string): void {
 		void promise.then(
 			() => this.completion?.(),
-			(error) => {
-				// reportError, not a template-stringified log line: interpolating the
-				// error throws its stack away, and only a value passed through
-				// reportError participates in the report-once contract (#1601).
-				reportUnlessCancelled(error, errorContext);
-				this.completion?.(error);
+			(error: unknown) => {
+				const failure = typeof error === "string" && isCancellationError(error)
+					? promptCancelled()
+					: toError(error);
+				reportUnlessCancelled(failure, errorContext);
+				this.completion?.(failure);
 			},
 		);
 	}
@@ -516,6 +538,8 @@ export default class ChoiceSuggester extends FuzzySuggestModal<IChoice> {
 
 		if (item.type === "Multi")
 			this.onChooseMultiType(<IMultiChoice>item);
+		else if (this.onPick)
+			this.onPick(item);
 		else {
 			// Route through executeWithFocusedProperty whenever it exists so the
 			// captured focusedProperty AND triggerContext (issue #1429) are both
@@ -525,16 +549,22 @@ export default class ChoiceSuggester extends FuzzySuggestModal<IChoice> {
 			// leaf inherits the executor's still-live context, which holds the same
 			// values this level was handed. Falls back to execute() only for stub
 			// executors without the method.
+			const enclosingCallerDay = this.choiceExecutor.callerDay;
 			if ("shiftKey" in evt && evt.shiftKey) {
-				this.choiceExecutor.pickDate = true;
+				this.choiceExecutor.callerDay = "pick";
 			}
-			const execute = this.choiceExecutor.executeWithFocusedProperty
+			const run = this.choiceExecutor.executeWithFocusedProperty
 				? this.choiceExecutor.executeWithFocusedProperty(
 						item,
 						this.focusedProperty,
 						this.triggerContext,
+						this.ancestry,
 					)
-				: this.choiceExecutor.execute(item);
+				: this.choiceExecutor.execute(item, this.ancestry);
+			// Shift picks a day for this choice, not for the Macro steps after it.
+			const execute = run.finally(() => {
+				this.choiceExecutor.callerDay = enclosingCallerDay;
+			});
 			this.settleCompletion(execute, `Could not run "${item.name}"`);
 		}
 	}
@@ -583,6 +613,8 @@ export default class ChoiceSuggester extends FuzzySuggestModal<IChoice> {
 			// Hand the awaiting run down through every drill-down/Back level; only
 			// the terminal action settles it.
 			completion: this.completion,
+			ancestry: this.ancestry,
+			onPick: this.onPick,
 		});
 	}
 }

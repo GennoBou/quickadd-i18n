@@ -1,4 +1,4 @@
-import type { App, Editor, EditorPosition, TFile } from "obsidian";
+import type { App, Editor, EditorChange, EditorPosition, TFile } from "obsidian";
 import { MarkdownView } from "obsidian";
 import { getActiveMarkdownEditorView } from "./activeMarkdownEditor";
 import { log } from "../logger/logManager";
@@ -11,6 +11,63 @@ import {
 } from "../types/linkPlacement";
 import { buildFileLinkText } from "./fileLinks";
 import { appendConfiguredFrontmatterPropertyLinkValue } from "./frontmatterPropertyLinks";
+import { processNoteFrontMatter } from "./noteContent";
+import { appendLinkLineToNote } from "./fileLinks";
+import type { CapturePlacementResult } from "../formatters/helpers/capturePlacement";
+import type { EditorCursorPlacement, EditorTextMutationObserver } from "./editorCursorPlacement";
+
+export function insertCaptureInEditor(
+	payload: CapturePlacementResult,
+	app: App,
+	file: TFile,
+	action: string,
+): EditorCursorPlacement | null {
+	const view = getMarkdownEditorViewForFile(app, file);
+	if (!view) return null;
+	return insertCaptureInBoundEditor(payload, view.editor, action);
+}
+
+export function insertCaptureInBoundEditor(
+	payload: CapturePlacementResult,
+	editor: Editor,
+	action: string,
+): EditorCursorPlacement | null {
+	if (payload.cursor.kind === "none") return null;
+	const content = payload.content.replace(/\r\n?/g, "\n");
+	const cursorOffset = payload.content.slice(0, payload.cursor.value).replace(/\r\n?/g, "\n").length;
+	const at = (pos: EditorPosition) => editor.posToOffset(pos);
+	const cursor = editor.getCursor();
+	let edits: { from: EditorPosition; to?: EditorPosition; text: string; cursor: number }[];
+	if (action === "currentLine") {
+		edits = editor.listSelections().map(({ anchor, head }) => ({
+			from: at(anchor) <= at(head) ? anchor : head,
+			to: at(anchor) <= at(head) ? head : anchor,
+			text: content,
+			cursor: cursorOffset,
+		}));
+	} else if (action === "newLineAbove" || action === "newLineBelow") {
+		const above = action === "newLineAbove";
+		edits = [{
+			from: { line: cursor.line, ch: above ? 0 : editor.getLine(cursor.line).length },
+			text: above ? content + "\n" : "\n" + content,
+			cursor: cursorOffset + (above ? 0 : 1),
+		}];
+	} else {
+		return null;
+	}
+	const offsets: number[] = [];
+	const insertionEnds: number[] = [];
+	let delta = 0;
+	edits.sort((a, b) => at(a.from) - at(b.from));
+	for (const edit of edits) {
+		offsets.push(at(edit.from) + delta + edit.cursor);
+		insertionEnds.push(at(edit.from) + delta + edit.text.length - (action === "newLineAbove" ? 1 : 0));
+		delta += edit.text.length - (at(edit.to ?? edit.from) - at(edit.from));
+	}
+	editor.transaction({ changes: edits.map(({ from, to, text }) => ({ from, to, text })) });
+	editor.setSelections(insertionEnds.map(offset => ({ anchor: editor.offsetToPos(offset) })));
+	return { offsets, content: editor.getValue() };
+}
 
 /**
  * Returns the active markdown view if it is showing the given file,
@@ -26,13 +83,13 @@ export function getMarkdownEditorViewForFile(
 }
 
 /**
- * @returns true if the text was inserted, false if there was no active Markdown
- * editor to insert into (or insertion threw). Callers that need to know whether
+ * @returns true if the text was inserted, false if the active Markdown editor
+ * does not show `file` (or insertion threw). Callers that need to know whether
  * the capture actually landed (e.g. the URI x-callback handler) must check this.
  */
-export function appendToCurrentLine(toAppend: string, app: App): boolean {
+export function appendToCurrentLine(toAppend: string, app: App, file: TFile): boolean {
 	try {
-		const activeView = getActiveMarkdownEditorView(app);
+		const activeView = getMarkdownEditorViewForFile(app, file);
 
 		if (!activeView) {
 			log.logError(`unable to append '${toAppend}' to current line.`);
@@ -47,10 +104,10 @@ export function appendToCurrentLine(toAppend: string, app: App): boolean {
 	}
 }
 
-/** @returns true if inserted, false if no active Markdown editor (or it threw). */
-export function insertOnNewLine(toInsert: string, direction: "above" | "below", app: App): boolean {
+/** @returns true if inserted, false if the active Markdown editor does not show `file` (or it threw). */
+export function insertOnNewLine(toInsert: string, direction: "above" | "below", app: App, file: TFile): boolean {
 	try {
-		const activeView = getActiveMarkdownEditorView(app);
+		const activeView = getMarkdownEditorViewForFile(app, file);
 
 		if (!activeView) {
 			log.logError(`unable to insert '${toInsert}' on new line ${direction}.`);
@@ -83,12 +140,12 @@ export function insertOnNewLine(toInsert: string, direction: "above" | "below", 
 	}
 }
 
-export function insertOnNewLineAbove(toInsert: string, app: App): boolean {
-	return insertOnNewLine(toInsert, "above", app);
+export function insertOnNewLineAbove(toInsert: string, app: App, file: TFile): boolean {
+	return insertOnNewLine(toInsert, "above", app, file);
 }
 
-export function insertOnNewLineBelow(toInsert: string, app: App): boolean {
-	return insertOnNewLine(toInsert, "below", app);
+export function insertOnNewLineBelow(toInsert: string, app: App, file: TFile): boolean {
+	return insertOnNewLine(toInsert, "below", app, file);
 }
 
 /**
@@ -104,6 +161,7 @@ function insertPerSelection(
 	selections: { anchor: EditorPosition; head: EditorPosition }[],
 	mode: "replaceSelection" | "afterSelection",
 	textForSelection: (selectedText: string) => string,
+	applyChanges: (changes: EditorChange[], apply: () => void) => void,
 ): void {
 	const asIndex = (pos: EditorPosition) => editor.posToOffset(pos);
 
@@ -134,7 +192,7 @@ function insertPerSelection(
 		}
 	}
 
-	editor.transaction({ changes });
+	applyChanges(changes, () => editor.transaction({ changes }));
 
 	if (mode === "replaceSelection") {
 		editor.setSelections(
@@ -169,6 +227,7 @@ export async function insertLinkWithPlacement(
 		 * Other placements ignore it and insert `text`.
 		 */
 		textForSelection?: (selectedText: string) => string;
+		onEditorTextMutation?: EditorTextMutationObserver;
 	} = {},
 ): Promise<void> {
 	const {
@@ -176,6 +235,7 @@ export async function insertLinkWithPlacement(
 		frontmatterProperty,
 		frontmatterHandling = DEFAULT_FRONTMATTER_HANDLING,
 		textForSelection,
+		onEditorTextMutation,
 	} = options;
 	const view = app.workspace.getActiveViewOfType(MarkdownView);
 	if (!view) {
@@ -193,7 +253,7 @@ export async function insertLinkWithPlacement(
 			throw new Error("Cannot append link because the active Markdown view has no file.");
 		}
 
-		await app.fileManager.processFrontMatter(file, (frontmatter) => {
+		await processNoteFrontMatter(app, file, (frontmatter) => {
 			appendConfiguredFrontmatterPropertyLinkValue(
 				frontmatter,
 				frontmatterProperty ?? "",
@@ -216,6 +276,18 @@ export async function insertLinkWithPlacement(
 		return;
 	}
 
+	const applyChanges = (changes: EditorChange[], apply: () => void) => {
+		if (!onEditorTextMutation) { apply(); return; }
+		const before = editor.getValue();
+		const edits = changes.map(change => ({
+			from: editor.posToOffset(change.from),
+			to: editor.posToOffset(change.to ?? change.from),
+			text: change.text,
+		}));
+		apply();
+		onEditorTextMutation({ filePath: view.file?.path ?? null, before, after: editor.getValue(), edits });
+	};
+
 	// Snapshot current selections *before* mutating the document.
 	// We copy them because CodeMirror mutates the objects in-place.
 	const selections = editor
@@ -225,29 +297,25 @@ export async function insertLinkWithPlacement(
 			head: { ...sel.head },
 		}));
 
-	//////////////////////////////////////////////////////////////////
-	//  SELECTION-ANCHORED MODES WITH PER-SELECTION TEXT
-	//////////////////////////////////////////////////////////////////
 	if (
 		textForSelection &&
 		selections.length > 0 &&
 		(mode === "replaceSelection" || mode === "afterSelection")
 	) {
-		insertPerSelection(editor, selections, mode, textForSelection);
+		insertPerSelection(editor, selections, mode, textForSelection, applyChanges);
 		return;
 	}
 
-	//////////////////////////////////////////////////////////////////
-	//  REPLACE-SELECTION
-	//////////////////////////////////////////////////////////////////
 	if (mode === "replaceSelection") {
-		editor.replaceSelection(text);
+		const changes = selections.map(({ anchor, head }) => ({
+			from: editor.posToOffset(anchor) <= editor.posToOffset(head) ? anchor : head,
+			to: editor.posToOffset(anchor) <= editor.posToOffset(head) ? head : anchor,
+			text,
+		}));
+		applyChanges(changes, () => editor.replaceSelection(text));
 		return;
 	}
 
-	//////////////////////////////////////////////////////////////////
-	//  ALL OTHER MODES NEED EXPLICIT POSITION CALCULATION
-	//////////////////////////////////////////////////////////////////
 
 	/**
 		* Helper that converts a {line, ch} position to a monotonically
@@ -269,34 +337,17 @@ export async function insertLinkWithPlacement(
 			asIndex(sel.anchor) > asIndex(sel.head) ? sel.anchor : sel.head;
 
 		switch (mode) {
-			//////////////////////////////////////////////////////////////////
-			//  AFTER-SELECTION
-			//////////////////////////////////////////////////////////////////
 			case "afterSelection": {
-				editor.replaceRange(text, head);
+				applyChanges([{ from: head, text }], () => editor.replaceRange(text, head));
 				break;
 			}
 
-			//////////////////////////////////////////////////////////////////
-			//  END-OF-LINE
-			//////////////////////////////////////////////////////////////////
-			case "endOfLine": {
-				const lineStr = editor.getLine(head.line);
-				const eolPos = { line: head.line, ch: lineStr.length };
-				editor.replaceRange(text, eolPos);
-				break;
-			}
-
-			//////////////////////////////////////////////////////////////////
-			//  NEW-LINE
-			//////////////////////////////////////////////////////////////////
+			case "endOfLine":
 			case "newLine": {
-				const lineStr = editor.getLine(head.line);
-				const eolPos = { line: head.line, ch: lineStr.length };
-				// prepend newline only if the current line isn't empty
-				const isLineEmpty = lineStr.length === 0;
-				const prefix = isLineEmpty ? "" : "\n";
-				editor.replaceRange(prefix + text, eolPos);
+				const lineLength = editor.getLine(head.line).length;
+				const prefix = mode === "newLine" && lineLength > 0 ? "\n" : "";
+				const from = { line: head.line, ch: lineLength };
+				applyChanges([{ from, text: prefix + text }], () => editor.replaceRange(prefix + text, from));
 				break;
 			}
 		}
@@ -304,18 +355,21 @@ export async function insertLinkWithPlacement(
 }
 
 /**
- * Inserts a link to the specified file into the active view, respecting
- * Obsidian's "New link format" setting.
+ * Inserts a link to `file` into `currentNote`, the run's current note,
+ * respecting Obsidian's "New link format" setting. When the active editor shows
+ * that note the link lands at the configured placement; otherwise it is written
+ * through the vault, into the frontmatter property or as a new last line.
  *
- * @param app - The Obsidian app instance
- * @param file - The file to link to
- * @param linkOptions - Options controlling link insertion behavior
  * @returns True if the link was inserted, false otherwise
  */
-export async function insertFileLinkToActiveView(
+export async function insertFileLinkToCurrentNote(
 	app: App,
 	file: TFile,
+	currentNote: TFile | null,
 	linkOptions: AppendLinkOptions,
+	onEditorTextMutation?: EditorTextMutationObserver,
+	/** Write a text-placement link through the vault when no editor shows the note (a note named with `current=`). */
+	writeThroughVault = false,
 ): Promise<boolean> {
 	if (!linkOptions?.enabled) return false;
 
@@ -324,11 +378,7 @@ export async function insertFileLinkToActiveView(
 	// by raw options from scripts or third-party callers.
 	const normalized = normalizeAppendLinkOptions(linkOptions);
 
-	const view = app.workspace.getActiveViewOfType(MarkdownView);
-	// Only the frontmatter placement works without an editor; for text
-	// placements an editor-less view is the same as no view.
-	const editorRequired = normalized.placement !== "inFrontmatter";
-	if (!view || !view.file || (editorRequired && !view.editor)) {
+	if (!currentNote || currentNote.extension !== "md") {
 		// Read the guard from the RAW options: normalization defaults a missing
 		// requireActiveFile to true, which would turn a raw caller's previous
 		// silent skip into a throw.
@@ -338,12 +388,33 @@ export async function insertFileLinkToActiveView(
 		return false;
 	}
 
-	const sourcePath = view.file.path;
+	const sourcePath = currentNote.path;
 	const linkText = buildFileLinkText(app, file, {
 		sourcePath,
 		linkType: normalized.linkType,
 		placement: normalized.placement,
 	});
+
+	if (!getMarkdownEditorViewForFile(app, currentNote)) {
+		if (normalized.placement === "inFrontmatter") {
+			await processNoteFrontMatter(app, currentNote, (frontmatter) => {
+				appendConfiguredFrontmatterPropertyLinkValue(
+					frontmatter,
+					normalized.frontmatterProperty ?? "",
+					linkText,
+					normalized.frontmatterHandling,
+				);
+			});
+		} else if (writeThroughVault) {
+			await appendLinkLineToNote(app, currentNote, linkText, onEditorTextMutation);
+		} else {
+			if (linkOptions.requireActiveFile) {
+				throw new Error("Cannot append link because no active Markdown view is available.");
+			}
+			return false;
+		}
+		return true;
+	}
 
 	// Normalization guarantees "selection" only for selection-anchored
 	// placements with a plain link into the active note.
@@ -367,6 +438,7 @@ export async function insertFileLinkToActiveView(
 			frontmatterProperty: normalized.frontmatterProperty,
 			frontmatterHandling: normalized.frontmatterHandling,
 			textForSelection,
+			onEditorTextMutation,
 		},
 	);
 
@@ -379,19 +451,36 @@ export function setMarkdownCursorAtOffset(
 	offset: number,
 	expectedContent: string,
 ): boolean {
+	return setMarkdownCursorsAtOffsets(app, file, [offset], expectedContent);
+}
+
+export function setMarkdownCursorsAtOffsets(
+	app: App,
+	file: TFile,
+	offsets: readonly number[],
+	expectedContent: string,
+): boolean {
 	try {
 		if (file.extension !== "md") return false;
-		if (!Number.isSafeInteger(offset) || offset < 0) return false;
-		if (offset > expectedContent.length) return false;
+		if (!offsets.length || offsets.some(offset => !Number.isSafeInteger(offset) || offset < 0 || offset > expectedContent.length)) return false;
 
 		const view = app.workspace.getActiveViewOfType(MarkdownView);
 		if (!view || view.file?.path !== file.path) return false;
 		if (view.getMode() === "preview") return false;
 
 		const editor = view.editor;
-		if (!editor || editor.getValue() !== expectedContent) return false;
+		if (!editor) return false;
+		const content = editor.getValue();
+		let editorOffsets = offsets;
+		if (content !== expectedContent) {
+			if (content !== expectedContent.replace(/\r\n?/g, "\n")) return false;
+			editorOffsets = offsets.map(offset => expectedContent.slice(0, offset).replace(/\r\n?/g, "\n").length);
+		}
 
-		editor.setCursor(editor.offsetToPos(offset));
+		if (editorOffsets.length === 1) editor.setCursor(editor.offsetToPos(editorOffsets[0]));
+		else editor.setSelections(editorOffsets.map(offset => ({ anchor: editor.offsetToPos(offset) })));
+		const document = view.containerEl?.ownerDocument;
+		if (document && document.activeElement === document.body) editor.focus();
 		return true;
 	} catch {
 		log.logMessage(

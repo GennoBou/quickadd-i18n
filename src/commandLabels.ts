@@ -16,6 +16,9 @@ export const QUICK_ADD_COMMAND_LABELS = {
 	get openSettings() {
 		return t("Open settings");
 	},
+	get openAISettings() {
+		return t("Open AI Assistant settings");
+	},
 	get resumePrompt() {
 		return t("Return to prompt");
 	},
