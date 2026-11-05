@@ -20,8 +20,8 @@ export interface LocalizeConfig {
 }
 
 const builtinTranslations: Record<string, TranslationDict> = {
-    en: en as TranslationDict,
-    ja: ja as TranslationDict,
+    en,
+    ja,
 };
 
 let customTranslations: Record<string, TranslationDict> = {};
