@@ -1,59 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
-
-// FormatPreviewField -> FileNameDisplayFormatter and the suggesters reach the
-// formatter/engine graph, which pulls obsidian-dataview's CJS require('obsidian').
-vi.mock("obsidian-dataview", () => ({ getAPI: vi.fn() }));
+// @vitest-environment jsdom
+import { templateChoice } from "../../../tests/helpers/settings/choices";
+import { settingItem, settingNames, choiceIconInput } from "../../../tests/helpers/settings/fields";
+import { describe, expect, it } from "vitest";
 
 import { App } from "obsidian";
 import { fireEvent, render } from "@testing-library/svelte";
 import { flushSync } from "svelte";
 import type QuickAdd from "../../main";
-import type ITemplateChoice from "../../types/choices/ITemplateChoice";
 import TemplateChoiceForm from "./TemplateChoiceForm.svelte";
 import { createTemplateChoiceFormProps } from "./templateChoiceFormProps.svelte";
 
-function templateChoice(): ITemplateChoice {
-	return {
-		id: "t1",
-		name: "My Template",
-		type: "Template",
-		command: false,
-		templatePath: "",
-		folder: {
-			enabled: false,
-			folders: [],
-			chooseWhenCreatingNote: false,
-			createInSameFolderAsActiveFile: false,
-			chooseFromSubfolders: false,
-		},
-		fileNameFormat: { enabled: false, format: "" },
-		discoverExistingNotesBeforeCreate: false,
-		appendLink: false,
-		openFile: false,
-		fileOpening: {
-			location: "tab",
-			direction: "vertical",
-			mode: "default",
-			focus: true,
-		},
-		fileExistsBehavior: { kind: "prompt" },
-	};
-}
 
-function settingNames(container: HTMLElement): string[] {
-	return Array.from(container.querySelectorAll(".setting-item-name")).map(
-		(el) => el.textContent ?? "",
-	);
-}
 
-function settingItem(container: HTMLElement, name: string): HTMLElement {
-	const item = Array.from(container.querySelectorAll(".setting-item")).find(
-		(el) =>
-			el.querySelector(".setting-item-name")?.textContent?.trim() === name,
-	);
-	if (!item) throw new Error(`Setting item not found: ${name}`);
-	return item as HTMLElement;
-}
 
 function locationDropdown(container: HTMLElement): HTMLSelectElement {
 	const el = container.querySelector<HTMLSelectElement>(
@@ -63,13 +21,6 @@ function locationDropdown(container: HTMLElement): HTMLSelectElement {
 	return el;
 }
 
-function choiceIconInput(container: HTMLElement): HTMLInputElement {
-	const el = container.querySelector<HTMLInputElement>(
-		'input[aria-label="Choice icon"]',
-	);
-	if (!el) throw new Error("Choice icon input not found");
-	return el;
-}
 
 const plugin = {
 	getTemplateFiles: () => [],
@@ -78,7 +29,7 @@ const plugin = {
 
 function mountForm() {
 	const props = createTemplateChoiceFormProps({
-		choice: templateChoice(),
+		choice: templateChoice({ discoverExistingNotesBeforeCreate: false }),
 		app: new App(),
 		plugin,
 	});
@@ -91,22 +42,23 @@ function mountForm() {
 describe("TemplateChoiceForm", () => {
 	it("reveals the specific-folder controls reactively without remounting (the #1130 fix)", () => {
 		const { container, props } = mountForm();
-		const headerBefore = container.querySelector(".choiceNameHeaderButton");
+		const headerBefore = container.querySelector(".setting-item-heading");
+		expect(headerBefore).not.toBeNull();
 
 		// Default (obsidian-default) mode: no folder list / subfolder control.
 		expect(settingNames(container)).not.toContain("Include subfolders");
 		expect(container.querySelector(".qa-folder-path-input")).toBeNull();
 
 		// Flipping the controlling field updates the {#if} in place — the former
-		// reload() would have torn down and rebuilt the whole modal here. A bare
+		// reload() would have torn down and rebuilt the whole builder here. A bare
 		// `enabled` with no other flag derives to "specified" mode.
 		props.choice.folder.enabled = true;
 		flushSync();
 
 		expect(settingNames(container)).toContain("Include subfolders");
 		expect(container.querySelector(".qa-folder-path-input")).not.toBeNull();
-		// Same header node => no full remount (scroll/caret would survive in-app).
-		expect(container.querySelector(".choiceNameHeaderButton")).toBe(
+		// Same section heading node => no full remount (scroll/caret would survive in-app).
+		expect(container.querySelector(".setting-item-heading")).toBe(
 			headerBefore,
 		);
 	});
@@ -166,10 +118,39 @@ describe("TemplateChoiceForm", () => {
 		expect(toggle?.classList.contains("is-disabled")).toBe(false);
 	});
 
+	it("treats an empty file name as the note-title prompt", async () => {
+		const { container, props } = mountForm();
+		const input = settingItem(container, "File name")
+			.closest(".qa-field")
+			?.querySelector("input") as HTMLInputElement;
+		expect(input.value).toBe("");
+
+		input.value = "{{DATE}} {{VALUE}}";
+		await fireEvent.input(input);
+		expect(props.choice.fileNameFormat).toEqual({ enabled: true, format: "{{DATE}} {{VALUE}}" });
+
+		input.value = " ";
+		await fireEvent.input(input);
+		expect(props.choice.fileNameFormat.enabled).toBe(false);
+	});
+
+	it("keeps a leading space typed into an empty file name", async () => {
+		const { container, props } = mountForm();
+		const input = settingItem(container, "File name")
+			.closest(".qa-field")
+			?.querySelector("input") as HTMLInputElement;
+
+		input.value = " ";
+		await fireEvent.input(input);
+		flushSync();
+		expect(input.value).toBe(" ");
+		expect(props.choice.fileNameFormat.enabled).toBe(false);
+	});
+
 	it("opens a legacy choice on its derived mode", () => {
 		const props = createTemplateChoiceFormProps({
 			choice: {
-				...templateChoice(),
+				...templateChoice({ discoverExistingNotesBeforeCreate: false }),
 				folder: {
 					enabled: true,
 					folders: [],
@@ -192,7 +173,7 @@ describe("TemplateChoiceForm", () => {
 	it("writes the canonical booleans when a mode is selected", async () => {
 		const props = createTemplateChoiceFormProps({
 			choice: {
-				...templateChoice(),
+				...templateChoice({ discoverExistingNotesBeforeCreate: false }),
 				folder: {
 					enabled: true,
 					folders: ["Notes"],
@@ -263,16 +244,27 @@ describe("TemplateChoiceForm", () => {
 		expect(settingNames(container)).toContain("File opening location");
 	});
 
-	it("shows the file-exists mode row only for update/create categories", () => {
+	it("shows the file-exists mode row for every category except Ask every time", () => {
 		const { container, props } = mountForm();
-		expect(settingNames(container)).not.toContain("New file naming");
+		const modeRows = ["Update action", "New file naming", "Keep action"];
+		expect(settingNames(container).filter((name) => modeRows.includes(name))).toEqual([]);
 
 		props.choice.fileExistsBehavior = { kind: "apply", mode: "increment" };
 		flushSync();
-		const names = settingNames(container);
-		expect(
-			names.includes("New file naming") || names.includes("Update action"),
-		).toBe(true);
+		expect(settingNames(container).filter((name) => modeRows.includes(name))).toEqual(["New file naming"]);
+	});
+
+	it("keeps a saved Keep existing file choice on Open existing file and offers Do nothing", async () => {
+		const { container, props } = mountForm();
+		props.choice.fileExistsBehavior = { kind: "apply", mode: "doNothing" };
+		flushSync();
+		const select = settingItem(container, "Keep action").querySelector("select")!;
+		expect(select.value).toBe("doNothing");
+		expect(Array.from(select.options, (option) => option.text)).toEqual(["Open existing file", "Do nothing"]);
+
+		await fireEvent.change(select, { target: { value: "leaveUnchanged" } });
+		flushSync();
+		expect(props.choice.fileExistsBehavior).toEqual({ kind: "apply", mode: "leaveUnchanged" });
 	});
 
 	it("persists the copy-link-to-clipboard toggle", async () => {
@@ -294,28 +286,51 @@ describe("TemplateChoiceForm", () => {
 		const input = choiceIconInput(container);
 
 		expect(input.placeholder).toBe("file-text");
-		expect(
-			container.querySelector(".qa-choice-icon-setting-preview svg"),
-		).toHaveAttribute("data-icon", "file-text");
+		expect(container.querySelector(".qa-choice-icon-setting-preview svg")?.getAttribute("data-icon")).toBe("file-text");
 
 		await fireEvent.input(input, { target: { value: "star" } });
 		flushSync();
 		expect(props.choice.icon).toBe("star");
-		expect(
-			container.querySelector(".qa-choice-icon-setting-preview svg"),
-		).toHaveAttribute("data-icon", "star");
+		expect(container.querySelector(".qa-choice-icon-setting-preview svg")?.getAttribute("data-icon")).toBe("star");
 
 		await fireEvent.input(input, { target: { value: "   " } });
 		flushSync();
 		expect(props.choice.icon).toBeUndefined();
-		expect(
-			container.querySelector(".qa-choice-icon-setting-preview svg"),
-		).toHaveAttribute("data-icon", "file-text");
+		expect(container.querySelector(".qa-choice-icon-setting-preview svg")?.getAttribute("data-icon")).toBe("file-text");
 	});
 
 	it("keeps the optional icon override at the bottom of the form", () => {
 		const { container } = mountForm();
 
 		expect(settingNames(container).at(-1)).toBe("Icon");
+	});
+
+	// #1993: closing the builder used to drop a folder typed but never added.
+	describe("a folder typed without Add", () => {
+		async function typeFolder(mode: string, text: string) {
+			const mounted = mountForm();
+			await fireEvent.change(locationDropdown(mounted.container), { target: { value: "specified" } });
+			flushSync();
+			const input = mounted.container.querySelector<HTMLInputElement>(".qa-folder-path-input")!;
+			await fireEvent.input(input, { target: { value: text } });
+			if (mode !== "specified") {
+				await fireEvent.change(locationDropdown(mounted.container), { target: { value: mode } });
+				flushSync();
+			}
+			mounted.unmount();
+			return mounted.props.choice.folder;
+		}
+
+		it("is added when the builder closes", async () => {
+			expect((await typeFolder("specified", " Meetings ")).folders).toEqual(["Meetings"]);
+		});
+
+		it("is ignored when it is blank", async () => {
+			expect((await typeFolder("specified", "   ")).folders).toEqual([]);
+		});
+
+		it("is left out once another location mode is chosen", async () => {
+			expect((await typeFolder("active-file", "Meetings")).folders).toEqual([]);
+		});
 	});
 });

@@ -1,7 +1,5 @@
 import type IChoice from "../types/choices/IChoice";
-import type IMacroChoice from "../types/choices/IMacroChoice";
-import type IMultiChoice from "../types/choices/IMultiChoice";
-import type ITemplateChoice from "../types/choices/ITemplateChoice";
+import { isCaptureChoice, isMacroChoice, isMultiChoice, isTemplateChoice } from "../types/choices/choiceType";
 import type ICaptureChoice from "../types/choices/ICaptureChoice";
 import type { ICommand } from "../types/macros/ICommand";
 import type { IChoiceCommand } from "../types/macros/IChoiceCommand";
@@ -10,47 +8,39 @@ import type { IConditionalCommand } from "../types/macros/Conditional/ICondition
 import type { INestedChoiceCommand } from "../types/macros/QuickCommands/INestedChoiceCommand";
 import { childChoicesOf, isChoiceLike, rootChoicesOf } from "./choiceUtils";
 import { commandListOf, isCommandLike } from "./macroUtils";
+import { resolveTemplatePath } from "./templateFolderUtils";
+import { collectTemplateIncludePaths } from "./templateIncludes";
 import { CommandType } from "../types/macros/CommandType";
 
-export interface ChoiceCatalogEntry {
+interface ChoiceCatalogEntry {
 	choice: IChoice;
 	parentId: string | null;
 	path: string[];
 }
 
-export interface ChoiceClosureResult {
+interface ChoiceClosureResult {
 	catalog: Map<string, ChoiceCatalogEntry>;
 	choiceIds: string[];
 	missingChoiceIds: string[];
 }
 
-export interface ScriptDependencyCollection {
+interface ScriptDependencyCollection {
 	userScriptPaths: Set<string>;
 	conditionalScriptPaths: Set<string>;
 }
 
-export interface FileDependencyCollection {
+interface FileDependencyCollection {
 	templatePaths: Set<string>;
 	captureTemplatePaths: Set<string>;
+	/**
+	 * Files pulled in by `{{TEMPLATE:...}}` in an enabled Capture format. The
+	 * formatter reads them as vault paths at run time, so a package without
+	 * them imports fine and then captures a "template not found" placeholder.
+	 */
+	includePaths: Set<string>;
 }
 
 const EMPTY_SET = new Set<string>();
-
-function isMultiChoice(choice: IChoice): choice is IMultiChoice {
-	return choice.type === "Multi";
-}
-
-function isMacroChoice(choice: IChoice): choice is IMacroChoice {
-	return choice.type === "Macro";
-}
-
-function isTemplateChoice(choice: IChoice): choice is ITemplateChoice {
-	return choice.type === "Template";
-}
-
-function isCaptureChoice(choice: IChoice): choice is ICaptureChoice {
-	return choice.type === "Capture";
-}
 
 function shouldIncludeChoice(
 	choice: IChoice | null | undefined,
@@ -200,7 +190,7 @@ function collectDependenciesFromCommands(
 	}
 }
 
-export interface CollectChoiceClosureOptions {
+interface CollectChoiceClosureOptions {
 	excludedChoiceIds?: ReadonlySet<string>;
 }
 
@@ -257,77 +247,59 @@ export function collectChoiceClosure(
 	};
 }
 
+function visitIncludedChoices(
+	catalog: Map<string, ChoiceCatalogEntry>,
+	choiceIds: Iterable<string>,
+	onChoice: (choice: IChoice) => void,
+	onCommand: (command: ICommand) => void,
+): void {
+	const includedChoiceIds = new Set(choiceIds);
+	const visited = new Set<string>();
+	const visitChoice = (choice: IChoice) => {
+		if (!choice || !shouldIncludeChoice(choice, catalog, includedChoiceIds)) return;
+		if (visited.has(choice.id)) return;
+		visited.add(choice.id);
+		onChoice(choice);
+		if (isMultiChoice(choice) && Array.isArray(choice.choices)) {
+			choice.choices.forEach(visitChoice);
+		}
+		if (isMacroChoice(choice)) visitCommands(choice.macro?.commands);
+	};
+	const visitCommands = (commands: unknown) => {
+		for (const command of commandListOf(commands)) {
+			if (!isCommandLike(command)) continue;
+			if (visitReferencedChoiceFromCommand(command, catalog, includedChoiceIds, visitChoice)) continue;
+			onCommand(command);
+			if (command.type === CommandType.Conditional) {
+				const conditional = command as IConditionalCommand;
+				visitCommands(conditional.thenCommands);
+				visitCommands(conditional.elseCommands);
+			}
+		}
+	};
+	for (const id of choiceIds) {
+		const entry = catalog.get(id);
+		if (entry) visitChoice(entry.choice);
+	}
+}
+
 export function collectScriptDependencies(
 	catalog: Map<string, ChoiceCatalogEntry>,
 	choiceIds: Iterable<string>,
 ): ScriptDependencyCollection {
-	const includedChoiceIds = new Set<string>(choiceIds);
-	const visitedChoices = new Set<string>();
 	const userScriptPaths = new Set<string>();
 	const conditionalScriptPaths = new Set<string>();
-
-	const visitChoice = (choice: IChoice) => {
-		if (!choice) return;
-		if (!shouldIncludeChoice(choice, catalog, includedChoiceIds)) return;
-		if (visitedChoices.has(choice.id)) return;
-
-		visitedChoices.add(choice.id);
-
-		if (isMultiChoice(choice) && Array.isArray(choice.choices)) {
-			for (const child of choice.choices) {
-				visitChoice(child);
+	visitIncludedChoices(catalog, choiceIds, () => { }, (command) => {
+		if (command.type === CommandType.UserScript) {
+			const script = command as IUserScript;
+			if (script.path) userScriptPaths.add(script.path);
+		} else if (command.type === CommandType.Conditional) {
+			const { condition } = command as IConditionalCommand;
+			if (condition.mode === "script" && condition.scriptPath) {
+				conditionalScriptPaths.add(condition.scriptPath);
 			}
 		}
-
-		if (isMacroChoice(choice)) {
-			visitCommands(choice.macro?.commands);
-		}
-	};
-
-	const visitCommands = (commands: unknown) => {
-		for (const command of commandListOf(commands)) {
-			if (!isCommandLike(command)) continue;
-			if (
-				visitReferencedChoiceFromCommand(
-					command,
-					catalog,
-					includedChoiceIds,
-					visitChoice,
-				)
-			) {
-				continue;
-			}
-
-			switch (command.type) {
-				case CommandType.UserScript: {
-					const userScript = command as IUserScript;
-					if (userScript.path) userScriptPaths.add(userScript.path);
-					break;
-				}
-				case CommandType.Conditional: {
-					const conditional = command as IConditionalCommand;
-					const condition = conditional.condition;
-					if (condition.mode === "script" && condition.scriptPath) {
-						conditionalScriptPaths.add(condition.scriptPath);
-					}
-
-					visitCommands(conditional.thenCommands);
-					visitCommands(conditional.elseCommands);
-					break;
-				}
-				default:
-					break;
-			}
-		}
-	};
-
-	for (const id of choiceIds) {
-		const entry = catalog.get(id);
-		if (entry) {
-			visitChoice(entry.choice);
-		}
-	}
-
+	});
 	return { userScriptPaths, conditionalScriptPaths };
 }
 
@@ -335,73 +307,31 @@ export function collectFileDependencies(
 	catalog: Map<string, ChoiceCatalogEntry>,
 	choiceIds: Iterable<string>,
 ): FileDependencyCollection {
-	const includedChoiceIds = new Set<string>(choiceIds);
-	const visitedChoices = new Set<string>();
 	const templatePaths = new Set<string>();
 	const captureTemplatePaths = new Set<string>();
-
-	const visitChoice = (choice: IChoice) => {
-		if (!choice) return;
-		if (!shouldIncludeChoice(choice, catalog, includedChoiceIds)) return;
-		if (visitedChoices.has(choice.id)) return;
-
-		visitedChoices.add(choice.id);
-
+	const includePaths = new Set<string>();
+	visitIncludedChoices(catalog, choiceIds, (choice) => {
 		if (isTemplateChoice(choice) && choice.templatePath) {
-			templatePaths.add(choice.templatePath);
+			templatePaths.add(resolveTemplatePath(choice.templatePath));
 		}
-
-		if (
-			isCaptureChoice(choice) &&
-			choice.createFileIfItDoesntExist?.enabled &&
-			choice.createFileIfItDoesntExist.createWithTemplate &&
-			choice.createFileIfItDoesntExist.template
-		) {
-			captureTemplatePaths.add(choice.createFileIfItDoesntExist.template);
-		}
-
-		if (isMultiChoice(choice) && Array.isArray(choice.choices)) {
-			for (const child of choice.choices) {
-				visitChoice(child);
+		if (isCaptureChoice(choice)) {
+			const creation = choice.createFileIfItDoesntExist;
+			if (creation?.enabled && creation.createWithTemplate && creation.template) {
+				captureTemplatePaths.add(resolveTemplatePath(creation.template));
+			}
+			for (const path of captureFormatIncludes(choice)) {
+				includePaths.add(path);
 			}
 		}
+	}, () => { });
+	return { templatePaths, captureTemplatePaths, includePaths };
+}
 
-		if (isMacroChoice(choice)) {
-			visitCommands(choice.macro?.commands);
-		}
-	};
-
-	const visitCommands = (commands: unknown) => {
-		for (const command of commandListOf(commands)) {
-			if (!isCommandLike(command)) continue;
-			if (
-				visitReferencedChoiceFromCommand(
-					command,
-					catalog,
-					includedChoiceIds,
-					visitChoice,
-				)
-			) {
-				continue;
-			}
-
-			switch (command.type) {
-				case CommandType.Conditional: {
-					const conditional = command as IConditionalCommand;
-					visitCommands(conditional.thenCommands);
-					visitCommands(conditional.elseCommands);
-					break;
-				}
-				default:
-					break;
-			}
-		}
-	};
-
-	for (const id of choiceIds) {
-		const entry = catalog.get(id);
-		if (entry) visitChoice(entry.choice);
+/** `{{TEMPLATE:...}}` paths a Capture's format splices in when it runs. */
+export function captureFormatIncludes(choice: ICaptureChoice): Set<string> {
+	const format = choice.format;
+	if (!format?.enabled || typeof format.format !== "string") {
+		return new Set<string>();
 	}
-
-	return { templatePaths, captureTemplatePaths };
+	return collectTemplateIncludePaths(format.format);
 }

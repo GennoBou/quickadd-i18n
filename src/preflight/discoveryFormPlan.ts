@@ -3,6 +3,7 @@ import type { App } from "obsidian";
 import type { IChoiceExecutor } from "src/IChoiceExecutor";
 import type QuickAdd from "src/main";
 import type IChoice from "src/types/choices/IChoice";
+import { isCaptureChoice, isMacroChoice, isTemplateChoice } from "src/types/choices/choiceType";
 import type IMacroChoice from "src/types/choices/IMacroChoice";
 import type ITemplateChoice from "src/types/choices/ITemplateChoice";
 import { VALUE_SYNTAX } from "src/constants";
@@ -10,8 +11,8 @@ import type { TemplateNoteSelection } from "src/utils/templateNoteDiscovery";
 import { shouldRunTemplateNoteDiscovery } from "src/utils/templateNoteDiscoveryEligibility";
 import { getExistingNoteAction } from "src/template/fileExistsPolicy";
 import { commandListOf, isCommandLike } from "src/utils/macroUtils";
-import { getActiveEditorSelection } from "src/utils/activeMarkdownEditor";
-import { classifyStep, isCaptureChoice, isTemplateChoice } from "./macroCommandRole";
+import { currentSelection } from "src/utils/currentFile";
+import { classifyStep } from "./macroCommandRole";
 import { buildFormRoster, type FormRosterEntry } from "./macroFormRoster";
 import { collectChoiceRequirements, getUnresolvedRequirements } from "./collectChoiceRequirements";
 import type { FieldGroup, FieldRequirement } from "./RequirementCollector";
@@ -83,14 +84,10 @@ interface DiscoveryFormStep {
 	bindings: Map<string, { variable: string; condition: DiscoveryInputCondition | null }>;
 }
 
-export interface DiscoveryFormPlan {
+interface DiscoveryFormPlan {
 	requirements: FieldRequirement[];
 	config: DiscoveryFormConfig;
 	steps: DiscoveryFormStep[];
-}
-
-function isMacroChoice(choice: IChoice): choice is IMacroChoice {
-	return choice.type === "Macro";
 }
 
 function needsDiscovery(choice: IChoice, executor: IChoiceExecutor): choice is ITemplateChoice {
@@ -145,6 +142,8 @@ export async function buildDiscoveryFormPlan(
 			steps.push({ occurrenceId: choice.id, choiceId: choice.id, noteId: null, bindings });
 		}
 	}
+	// A Template run on its own is its only entry, and the caller's day is its to answer.
+	const entriesAreSteps = isMacroChoice(choice);
 	for (const entry of entries) {
 		const group = { ...entry.group, id: entry.occurrenceId };
 		const child = entry.kind === "choice" ? entry.choice : null;
@@ -167,7 +166,7 @@ export async function buildDiscoveryFormPlan(
 		if (!collectable) continue;
 		const collected = getUnresolvedRequirements(await collectChoiceRequirements(
 			app, plugin, executor, collectable,
-			{ preloadedUserScripts: executor.preloadedUserScripts },
+			{ preloadedUserScripts: executor.preloadedUserScripts, step: entriesAreSteps },
 		), executor.variables);
 		const existingNoteInputs = new Map<string, FieldRequirement>();
 		if (discovery && getExistingNoteAction(discovery.existingNoteAction) !== "open") {
@@ -176,13 +175,13 @@ export async function buildDiscoveryFormPlan(
 				fileNameFormat: { enabled: false, format: "" },
 				folder: { ...discovery.folder, enabled: false },
 			};
-			for (const requirement of await collectChoiceRequirements(app, plugin, executor, existingTarget)) {
+			for (const requirement of await collectChoiceRequirements(app, plugin, executor, existingTarget, { step: entriesAreSteps })) {
 				existingNoteInputs.set(requirement.id, requirement);
 			}
 		}
 		const captureSelection = child && isCaptureChoice(child) &&
 			(child.useSelectionAsCaptureValue ?? plugin.settings.useSelectionAsCaptureValue ?? true)
-			? getActiveEditorSelection(app)
+			? currentSelection(app, executor)
 			: "";
 		for (const requirement of collected) {
 			if (discovery && requirement.id === "value") continue;

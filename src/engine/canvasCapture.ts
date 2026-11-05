@@ -1,4 +1,5 @@
 import type { App, TAbstractFile, TFile } from "obsidian";
+import { View } from "obsidian";
 import {
 	CANVAS_FILE_EXTENSION_REGEX,
 	MARKDOWN_FILE_EXTENSION_REGEX,
@@ -39,7 +40,7 @@ type WorkspaceLeafLike = {
 
 type WorkspaceLike = {
 	getMostRecentLeaf?: () => WorkspaceLeafLike | null;
-	activeLeaf?: WorkspaceLeafLike | null;
+	getActiveViewOfType: (type: typeof View) => CanvasViewLike | null;
 	getActiveFile?: () => TFile | null;
 };
 
@@ -168,9 +169,9 @@ function isTFileLike(file: TAbstractFile | null): file is TFile {
 }
 
 function getActiveCanvasView(app: CanvasAppLike): CanvasViewLike | null {
-	const preferredLeaf =
-		app.workspace.activeLeaf ?? app.workspace.getMostRecentLeaf?.() ?? null;
-	const activeView = preferredLeaf?.view;
+	const activeView =
+		app.workspace.getActiveViewOfType(View) ??
+		app.workspace.getMostRecentLeaf?.()?.view;
 	if (!activeView || activeView.getViewType?.() !== "canvas") return null;
 	return activeView;
 }
@@ -275,9 +276,15 @@ function parseStoredCanvasData(raw: string, path: string): StoredCanvasData {
 	return parsed as StoredCanvasData;
 }
 
+/**
+ * The selected card of the active Canvas, or null when no Canvas is active.
+ * With `currentCanvas`, the run's current note, the active Canvas must be that
+ * file: a card selected in another Canvas is not where the run writes.
+ */
 export function resolveActiveCanvasCaptureTarget(
 	app: App,
 	action: CaptureAction,
+	currentCanvas?: TFile,
 ): CanvasCaptureTarget | null {
 	const canvasApp = app as unknown as CanvasAppLike;
 	const view = getActiveCanvasView(canvasApp);
@@ -291,6 +298,7 @@ export function resolveActiveCanvasCaptureTarget(
 	}
 
 	const canvasFile = getCanvasFile(canvasApp, view);
+	if (currentCanvas && canvasFile.path !== currentCanvas.path) return null;
 	const selectedNode = getSingleSelectedCanvasNode(canvas);
 	const selectedNodeData = getCanvasNodeDataById(canvas, selectedNode);
 

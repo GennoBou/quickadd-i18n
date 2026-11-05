@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment jsdom
+import { actionsSpy } from "../../../tests/helpers/settings/choiceActions";
+import type { vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { fireEvent, render } from "@testing-library/svelte";
-
-// ChoiceListItem -> renderChoiceName/contextMenu reach src/main -> obsidian-dataview.
-vi.mock("obsidian-dataview", () => ({ getAPI: vi.fn() }));
 
 import { App, Menu } from "obsidian";
 // Runtime "obsidian" is aliased to the test stub (vitest.config.mts); tsc/svelte-check
@@ -11,7 +11,6 @@ import { App, Menu } from "obsidian";
 import type { Menu as StubMenu } from "../../../tests/obsidian-stub";
 import ChoiceList from "./ChoiceList.svelte";
 import type IChoice from "../../types/choices/IChoice";
-import type { ChoiceListActions } from "./choiceListActions";
 
 const ShownMenu = Menu as unknown as typeof StubMenu;
 
@@ -27,20 +26,6 @@ const multi = (name: string, children: IChoice[], collapsed = false): IChoice =>
 		choices: children,
 	}) as unknown as IChoice;
 
-function actionsSpy(): ChoiceListActions {
-	return {
-		onDeleteChoice: vi.fn(),
-		onConfigureChoice: vi.fn(),
-		onToggleCommand: vi.fn(),
-		onDuplicateChoice: vi.fn(),
-		onRenameChoice: vi.fn(),
-		onMoveChoice: vi.fn(),
-		onReorderChoices: vi.fn(),
-		onAddChoice: vi.fn(),
-		onToggleCollapsed: vi.fn(),
-		onCommitFolder: vi.fn(),
-	};
-}
 
 const idsOf = (fn: unknown) =>
 	((fn as { mock: { calls: unknown[][] } }).mock.calls[0][0] as IChoice[]).map((c) => c.id);

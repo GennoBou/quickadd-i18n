@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import SearchableMultiSelect, {
 	type SearchableMultiSelectItem,
@@ -45,6 +46,23 @@ function search(container: HTMLElement, value: string): void {
 }
 
 describe("SearchableMultiSelect", () => {
+	it("counts one option and one match in the singular", () => {
+		const summary = (container: HTMLElement) =>
+			container.querySelector(".qa-searchable-multi-select__summary")?.textContent;
+		const { container: one } = createPicker([{ key: "alpha", value: "a", label: "Alpha" }]);
+		expect(summary(one)).toBe("0 selected · 1 option");
+
+		const { container } = createPicker([
+			{ key: "alpha", value: "a", label: "Alpha" },
+			{ key: "beta", value: "b", label: "Beta" },
+		]);
+		expect(summary(container)).toBe("0 selected · 2 options");
+		search(container, "alpha");
+		expect(summary(container)).toBe("0 selected · 1 match");
+		search(container, "a");
+		expect(summary(container)).toBe("0 selected · 2 matches");
+	});
+
 	it("keeps selected state while filtering and restores it when the filter clears", () => {
 		const { container, selected } = createPicker(
 			[
@@ -171,14 +189,8 @@ describe("SearchableMultiSelect", () => {
 
 	it("renders a useful empty state and disables search for an empty list", () => {
 		const { container } = createPicker([]);
-		expect(
-			container.querySelector(".qa-searchable-multi-select__empty"),
-		).toHaveTextContent("No options available");
-		expect(
-			container.querySelector<HTMLInputElement>(
-				".qa-searchable-multi-select__search",
-			),
-		).toBeDisabled();
+		expect(container.querySelector(".qa-searchable-multi-select__empty")?.textContent).toContain("No options available");
+		expect(container.querySelector<HTMLInputElement>(".qa-searchable-multi-select__search")?.disabled).toBe(true);
 	});
 
 	it("keeps the complete long label in the accessible row", () => {
@@ -190,8 +202,8 @@ describe("SearchableMultiSelect", () => {
 		const row = container.querySelector<HTMLLabelElement>(
 			".qa-searchable-multi-select__option",
 		);
-		expect(row).toHaveTextContent(label);
-		expect(row?.querySelector("input")).toHaveAttribute("type", "checkbox");
+		expect(row?.textContent).toContain(label);
+		expect(row?.querySelector("input")?.getAttribute("type")).toBe("checkbox");
 	});
 
 	it("caps large result sets while keeping a selected item visible", () => {
@@ -206,8 +218,6 @@ describe("SearchableMultiSelect", () => {
 			container.querySelectorAll(".qa-searchable-multi-select__option"),
 		).toHaveLength(200);
 		expect(optionLabels(container)).toContain("Option 499");
-		expect(
-			container.querySelector(".qa-searchable-multi-select__limit"),
-		).toHaveTextContent("Showing 200 of 500 options");
+		expect(container.querySelector(".qa-searchable-multi-select__limit")?.textContent).toContain("Showing 200 of 500 options");
 	});
 });

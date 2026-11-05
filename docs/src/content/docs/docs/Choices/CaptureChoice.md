@@ -12,17 +12,22 @@ stay right where you are. Use it to:
 - Log work under the right heading of a project note
 - Save interesting links for later reading
 
-![The QuickAdd Capture builder, showing the Location and Position sections](../Images/choices/capture-builder.png)
+![The QuickAdd Capture builder page, showing the Name field and the Location, Position, and Linking sections](../Images/choices/capture-builder.png)
 
 ## Set up your first capture {#set-up}
 
-1. Open **Settings → QuickAdd**, type a name like `Add to journal`, choose
-   **Capture** in the dropdown, and click **Add Choice**.
-2. Click the gear (⚙) next to the new choice.
-3. Set **Capture To** to where entries should land, for example
+1. In **Settings → QuickAdd**, click **New choice** → **Capture**. The
+   Capture builder opens as a page of the settings window; set **Name** to
+   `Add to journal`. (Before QuickAdd 2.30.0, the builder is a dialog; click
+   its name at the top to rename it.)
+2. Set **Capture to** to where entries should land, for example
    `Journal/{{DATE}}.md`.
-4. Enable **Capture format** and describe one entry, for example
-   `- {{DATE:HH:mm}} {{VALUE}}`.
+3. Turn on **Create file if it doesn't exist**, so the first capture of the
+   day creates today's note instead of stopping with a "Target file missing"
+   notice.
+4. In **Capture format**, describe one entry, for example
+   `- {{DATE:HH:mm}} {{VALUE}}`. (Before QuickAdd 2.30.0, turn on the
+   **Capture format** toggle first.)
 5. Run it: command palette → `QuickAdd: Run`, pick `Add to journal`,
    type your entry.
 
@@ -45,10 +50,19 @@ The path supports [format syntax](/docs/FormatSyntax/), so it can be dynamic.
 A daily journal capture might use:
 
 ```text
-Journal/{{DATE:gggg-MM-DD - ddd MMM D}}.md
+Journal/{{DATE:YYYY-MM-DD - ddd MMM D}}.md
 ```
 
 Every run finds today's file, and your entry is captured to it.
+
+For your daily note, click **Daily note** next to **Capture to** (QuickAdd
+2.30.0 or later). It writes
+[`{{DAILY}}`](/docs/FormatSyntax/#daily) into the field and turns on **Create
+file if it doesn't exist**. `{{DAILY}}` uses the folder, date format, and
+template from Obsidian's **Daily notes** settings, or from Periodic Notes when
+it manages your daily notes, so the path always matches the note **Open
+today's daily note** opens. [`{{WEEKLY}}`, `{{MONTHLY}}`, `{{QUARTERLY}}`, and `{{YEARLY}}`](/docs/FormatSyntax/#periodic-notes)
+do the same for Periodic Notes.
 
 File names are Markdown-first:
 
@@ -93,6 +107,10 @@ matches. The row hides when the typed name matches an existing note in scope,
 so typing an existing name selects it instead of offering a duplicate. The
 picker still opens for an empty folder, tag, property, or filtered scope so you
 can create the first note there.
+
+In the [one-page input form](/docs/Advanced/onePageInputs/), this picker starts
+empty, and the form doesn't submit until you choose a note or a new note name
+(QuickAdd 2.30.0 or later; earlier versions picked the first note for you).
 
 ### Capture to a folder {#capturing-to-folders}
 
@@ -203,17 +221,27 @@ temporary variables after the choice runs.
 
 ### Friendlier names in the picker {#file-picker-labels}
 
-The picker labels each note by its frontmatter `title` when available, then
-its first level-1 heading, then its file name. The selected destination is
-always the real file, so captures write to the same place even when the label
-is friendlier than the filename.
+The picker shows a note's file name. When the file name is an ID, the note
+shows its first level-1 heading instead. An ID is an unbroken timestamp of 12
+or more digits, such as `202610061432`, a UUID, or a ULID. A date such as
+`2026-10-06` is not an ID, so a daily note shows its file name. A frontmatter
+`title` wins for every note. The selected destination is always the real file,
+so captures write to the same place even when the label is friendlier than the
+filename. Before QuickAdd 2.32.0, a note showed its first level-1 heading
+whenever it had one, whatever its file name.
+
+You can also find a note by its `aliases`. A note found that way shows the
+alias with the note's name beneath it, as in Obsidian's quick switcher, and
+typing an alias exactly picks its note instead of offering to create a new one
+(QuickAdd 2.30.0 or later).
 
 ## Shape the entry: Capture format {#capture-format}
 
 _Capture format_ is what actually gets written - think of it as a mini
-template for one entry. When disabled, QuickAdd writes `{{VALUE}}`: whatever
+template for one entry. Left empty, QuickAdd writes `{{VALUE}}`: whatever
 you type in the prompt (or your editor selection, if selection-as-value is
-enabled).
+enabled). Before QuickAdd 2.30.0, the field has a toggle: it is hidden while
+the toggle is off, and off means `{{VALUE}}` on its own.
 
 All of [format syntax](/docs/FormatSyntax/) works here:
 
@@ -224,6 +252,11 @@ All of [format syntax](/docs/FormatSyntax/) works here:
 ```markdown title="What gets written (after typing "Called the bank")"
 - 09:42 Called the bank
 ```
+
+To nest a line, press **Tab** in the box: once you have typed or clicked in it,
+Tab inserts a tab character (with a selection, it indents every touched line).
+Tabbing through the settings still passes the box by, and **Shift+Tab** moves
+focus out.
 
 For a long format, keep it in a note and reference it:
 
@@ -276,6 +309,32 @@ setting.
 
 _Task_ formats your captured text as a task (`- [ ] ...`).
 
+### One entry per line {#one-entry-per-line}
+
+_Requires QuickAdd 2.30.0 or later._
+
+_One entry per line_ writes the capture format once for each line of
+`{{VALUE}}`. Paste, select, or type several lines, and each becomes its own
+entry:
+
+```markdown title="Format (with Task on)"
+{{VALUE}} 📅 {{VDATE:due,YYYY-MM-DD}}
+```
+
+```markdown title="You type three lines and answer "friday""
+- [ ] Book the venue 📅 2026-10-02
+- [ ] Send the invites 📅 2026-10-02
+- [ ] Order the cake 📅 2026-10-02
+```
+
+Good to know:
+
+- Blank lines are skipped and each line is trimmed. If every line is blank, nothing is written, unless `{{VALUE}}` has a `|default:`, which is written once.
+- Every other placeholder is asked once and reused for every line. Macros (`{{MACRO:...}}`), inline scripts, and included templates run once per capture, not once per line. `{{RANDOM:...}}` gives each line its own value.
+- The `{{VALUE}}` prompt opens as a multi-line box, and so does its field in the [one-page input form](/docs/Advanced/onePageInputs/). A `|type:` on the token wins.
+- A multi-line editor selection, or a value passed from a script, the URI, or the CLI, is split the same way.
+- Only the `{{VALUE}}` written in the Capture format splits. A `{{VALUE}}` inside an included `{{TEMPLATE:...}}` is filled once, as a whole.
+
 ### Which day {#date-origin}
 
 Same [Which day](/docs/Choices/TemplateChoice/#date-origin) setting as a
@@ -299,7 +358,8 @@ today.
 _Use editor selection as default value_ controls whether selected text in the
 editor is used as `{{VALUE}}` instead of prompting: **Follow global setting**,
 **Use selection**, or **Ignore selection** (the global default lives in
-**Settings → Input**). This does not affect `{{SELECTED}}`.
+[**Settings → QuickAdd → Advanced**](/docs/Settings/#advanced-input), or on the main
+QuickAdd tab before QuickAdd 2.30.0). This does not affect `{{SELECTED}}`.
 
 ### Pick where in the note it lands: Write position {#write-position}
 
@@ -311,7 +371,7 @@ depend on whether **Capture to active file** is enabled:
 - **New line above cursor** / **New line below cursor** (active file only)
 - **After line…** - insert after a target line you specify, or pick a heading at run time. The workhorse for structured notes - see [Insert after](#insert-after).
 - **Before line…** - see [Insert before](#insert-before)
-- **Bottom of file**
+- **Bottom of file** - starts the entry on a new line. For a blank line between entries, put one in the format, as in `{{VALUE}}\n\n`. Before QuickAdd 2.30.0, a format ending in `\n` also left a blank line before each new entry.
 - **Property** - set a frontmatter value or add items to a list.
 
 ### Capture into a property {#property}
@@ -333,17 +393,57 @@ QuickAdd stops the capture instead of choosing one.
 
 **Action** controls the update:
 
-- **Set value** replaces the property's value. For a List property, text becomes
-  one item, and a typed list replaces the whole list. An empty text value clears
-  the list. Commas and line breaks inside text do not split it into several items.
-- **Add to list** adds one text value or a list of text values. Existing items
-  keep their order, and exact duplicates are skipped. An existing text, number,
-  or checkbox value causes an error.
+- **Set value** replaces the property's value. An empty value clears a list.
+- **Add to list** adds new items below the existing ones. Exact duplicates are
+  skipped. An existing text, number, or checkbox value causes an error.
+
+For a list property, each line of the Capture format is one item, the same way
+Enter works in Obsidian's List property editor. Lines are trimmed, blank lines
+are ignored, and a comma inside a line stays part of that item.
+
+**Sort list** sets the order of the list QuickAdd writes. **Keep order** is the
+default and keeps the order described above. **Ascending** and **Descending**
+sort the whole list after new items are added and duplicates are removed. This
+applies to both actions and to formats with `{{PROPERTY}}`.
+
+Items sort in natural text order, so `YYYY-MM-DD` dates sort chronologically
+and `item 2` comes before `item 10`. For example, with **Ascending**, adding
+`2026-10-11` to `[2026-10-10, 2026-10-12]` gives
+`[2026-10-10, 2026-10-11, 2026-10-12]`. Adding it again changes nothing.
+
+#### Keep the current value with `{{PROPERTY}}`
+
+In the format, `{{PROPERTY}}` is the property's current value. Put it where
+that value should appear. When the format contains it, **Add to list** and
+**Set value** write the same list. QuickAdd drops duplicate items and keeps
+the first occurrence. An existing list item that contains a line break stops
+the capture. See [format syntax](/docs/FormatSyntax/#property) for examples.
+
+Other useful patterns:
+
+- Several fixed lines add several items in one run, with no prompt.
+- `{{VALUE}}` on its own line adds whatever you type as one more item.
+- A `{{VALUE:notes|type:multiline}}` prompt is a free-form "one item per line"
+  box.
+- Text, number, checkbox, date, and date-time properties never split on line
+  breaks.
+- A `|multi` picker or a script's list on its own line adds one item per pick,
+  next to any other lines. Its `|format:markdown` or `|format:yaml` adds no dashes or brackets.
+  `|format:inline` or `|format:spaced` joins the picks into one item, and so
+  does other text on the picker's line. This needs QuickAdd 2.28.0 or later;
+  earlier versions join the picks into one item when the format has other
+  lines.
+- A format that is only a `|multi` picker or a script's list writes each item
+  as it is, even one that contains a line break. Next to other lines, such an
+  item stops the capture.
 
 Neither action converts an existing text, number, or checkbox property into a
-list. An empty text value or empty list with **Add to list** leaves the note
-unchanged. It does not create a missing note, write properties, insert links,
-or copy links.
+list. An empty or whitespace-only text value or empty list with **Add to list**
+leaves the note unchanged. It does not create a missing note, write properties,
+insert links, or copy links.
+
+Inline scripts read the current value through
+[Property Capture variables](/docs/InlineScripts/#property-capture-variables).
 
 **Create property if missing** permits a new key. When disabled, a missing key
 stops the capture. **Create file if it doesn't exist** separately controls
@@ -364,7 +464,11 @@ to a missing property whose type is already set in Obsidian. An explicit
 | `status` | **Set value** | `{{VALUE:status}}` | The entered text. |
 | `rating` | **Set value** | `{{VALUE:rating\|type:number}}` | A Number property. |
 | `done` | **Set value** | `{{VALUE:done\|type:checkbox}}` | A Checkbox property. |
+| `tags` | **Add to list** | `work` and `personal` on two lines | Adds both tags without a prompt. |
 | `tags` | **Add to list** | `{{VALUE:work,personal\|multi}}` | Adds the selected tags. |
+| `tags` | **Add to list** | `{{VALUE:work,personal\|multi}}` then `inbox` on two lines | Adds the selected tags and `inbox`. |
+| `tags` | **Add to list** | `work` then `{{PROPERTY}}` on two lines | Inserts `work` above the existing tags. |
+| `status` | **Set value** | `{{PROPERTY}} → Ready` | Keeps the current text and appends ` → Ready`. |
 | `people` | **Set value** | `{{FILE:People\|multi\|link}}` | Replaces the list with links to the selected notes. |
 
 The value must match the property's Obsidian type, or its existing value when
@@ -376,10 +480,16 @@ Objects and lists containing non-text values are rejected. **Set value** removes
 exact duplicate list items while preserving their order.
 
 For a new property without a known type, the captured value determines the type.
-Date properties accept `YYYY-MM-DD`, and date-time properties accept ISO date-time
-text such as `2026-09-07T14:30`. An intentional empty text value or empty list
-clears a matching property with **Set value**. Use `|optional` to allow an empty
-prompt answer. Cancelling a prompt stops the capture.
+Date properties accept `YYYY-MM-DD`, and date-time properties accept ISO
+date-time text such as `2026-09-07T14:30`. An intentional empty text value or
+empty list clears a matching property with **Set value**. Use `|optional` to
+allow an empty prompt answer. Cancelling a prompt stops the capture.
+
+Several lines of text are the one exception. **Set value** stops with an error
+instead of guessing, because several lines usually mean a list, and writing them
+as text would register the property as Text for the whole vault and block every
+later **Add to list**. Use **Add to list** to create it as a list, or set the
+property's type in Obsidian first - choose Text to keep the lines as one value.
 
 QuickAdd collects and validates the property inputs before writing or creating
 the note. **Task** and **Run Templater on entire destination file after capture**
@@ -483,6 +593,10 @@ body capture, it places the cursor at the end of the inserted text so you can ke
 This is skipped for preview/unfocused opens and when Templater cursor markers
 take over.
 
+Use [`{{CURSOR}}`](/docs/FormatSyntax/#cursor) in the Capture format to place
+the cursor within the inserted text. The marker also works when the destination
+is already focused in an editing mode and **Open** is off.
+
 ### Run it from a hotkey: Command palette {#command-palette}
 
 **Add to command palette** registers the capture as an Obsidian command, the
@@ -494,10 +608,17 @@ choice.
 
 ### Run Templater on the whole file afterwards {#run-templater-on-entire-destination-file-after-capture}
 
-_Run Templater on entire destination file after capture_ is an advanced,
-legacy option: it executes any `<% %>` anywhere in the destination file,
-including inside code blocks. Leave it off unless you specifically need that
-whole-file pass.
+:::caution[Deprecated]
+_Run Templater on entire destination file after capture_ is deprecated and will
+be removed in a future release. QuickAdd already runs Templater in what it
+captures, so the option is no longer needed. In QuickAdd 2.30.0 or later, the
+builder only shows it on choices that already have it on, and a Capture that
+uses it shows a notice once per session. Turn it off.
+:::
+
+The option executes any `<% %>` anywhere in the destination file, including
+inside code blocks. When that pass changes the note, QuickAdd skips placing the
+cursor at `{{CURSOR}}`, since the text under the marker may have moved.
 
 ### Templater and newly created notes {#templater-and-newly-created-files}
 
@@ -536,8 +657,11 @@ X
 A
 ```
 
-With Insert after you can also enable **Insert at end of section** and
-**Consider subsections** - see [below](#consider-subsections--option).
+A new Capture starts with **Insert at end of section** on, so each entry lands
+below the previous one, and **Create line if not found** on at the **Top**. Turn
+**Insert at end of section** off to put the newest entry first. Before QuickAdd
+2.30.0, both started off. **Consider subsections** is covered
+[below](#consider-subsections--option).
 
 **Create line if not found** creates the target line when it doesn't exist -
 useful when the heading might not be in the note yet. The created line can go
@@ -545,6 +669,12 @@ at the **Top** or **Bottom** of the file, at your **Cursor**, or **Ordered** -
 sorted among same-level headings; see
 [Ordered section placement](#ordered-section-placement) for
 reverse-chronological logs and changelogs.
+
+At the **Top** or **Bottom**, the created lines sit right against the note's
+content, with no blank line between them. In QuickAdd 2.31.0 or later, the
+exception is two blockquote lines that would touch, such as a created callout
+opener right below a quote: QuickAdd puts one blank line between them, so the
+callout renders on its own instead of joining the quote.
 
 The target may span several lines: type `\n` in the **Insert after** field to
 match a multi-line anchor (the preview shows it expanded). **Inline
@@ -554,7 +684,7 @@ be a single line; a `\n` target there is rejected with a notice.
 ### Ordered section placement {#ordered-section-placement}
 
 When **Create line if not found** is set to **Ordered** (full label:
-`Ordered (place new section among siblings)`), a missing "Insert after"
+`Ordered among siblings`), a missing "Insert after"
 heading is created at its **sorted position among same-level headings**. This
 is the building block for a reverse-chronological log: each new dated section
 is added above older ones, while a fixed title stays pinned at the top.
@@ -744,7 +874,7 @@ Selected-card mode needs exactly one selected card. If the selection is
 missing, multiple, or unsupported, QuickAdd aborts with a notice instead of
 writing to the wrong place.
 
-When append-link is **Enabled (requires active file)** and the capture runs
+When **Link to captured file** is **Enabled (strict)** and the capture runs
 from a Canvas card without a focused Markdown editor, the capture still writes
 and link insertion is skipped.
 

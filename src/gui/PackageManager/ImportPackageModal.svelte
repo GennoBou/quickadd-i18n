@@ -1,9 +1,11 @@
 <script lang="ts">
 	import type { App } from "obsidian";
 	import { Notice } from "obsidian";
+	import { tick } from "svelte";
 	import { settingsStore } from "../../settingsStore";
-	import { normalizeTemplateFolderPaths } from "../../utilityObsidian";
+	import type IChoice from "../../types/choices/IChoice";
 	import type {
+		ApplyImportResult,
 		LoadedQuickAddPackage,
 		PackageAnalysis,
 		ChoiceImportMode,
@@ -17,17 +19,19 @@
 	} from "../../services/packageImportService";
 	import type { PackagePreview } from "../../services/packagePreview";
 	import {
-		isFullyReviewed,
 		requiresAcknowledgement,
+		unreviewedScriptCount,
 	} from "../../services/packagePreview";
 	import CapabilityBanner from "./CapabilityBanner.svelte";
 	import FilePreviewRow from "./FilePreviewRow.svelte";
-	import MacroDisclosure from "./MacroDisclosure.svelte";
+	import ImportAcknowledgement from "./ImportAcknowledgement.svelte";
+	import ImportChoices from "./ImportChoices.svelte";
+	import PackageWarnings from "./PackageWarnings.svelte";
 	import ObsidianIcon from "../components/ObsidianIcon.svelte";
 	import {
 		ExistenceResolver,
 		applyExistsResult,
-		effectiveChoiceMode,
+		defaultAssetDestinationFor,
 		initAssetDecisions,
 		initChoiceDecisions,
 		resolveAssetDecision,
@@ -45,7 +49,16 @@
 	} from "./importDecisions";
 	import { t } from "src/i18n";
 
-	let { app, close }: { app: App; close: () => void } = $props();
+	let {
+		app,
+		close,
+		onImported,
+	}: {
+		app: App;
+		close: () => void;
+		/** Called after a successful import with the choices as they were before it. */
+		onImported?: (result: ApplyImportResult, previousChoices: IChoice[]) => void;
+	} = $props();
 
 	// Lazily memoized so the `app` prop is read inside a closure (not captured at
 	// the top level) and so the monotonic token survives every re-paste.
@@ -59,7 +72,9 @@
 	let preview = $state<PackagePreview | null>(null);
 	let acknowledged = $state(false);
 	let reviewedScriptPaths = $state(new Set<string>());
+	let reviewedChoiceIds = $state(new Set<string>());
 	let expandedMacros = $state(new Set<string>());
+	let expandedCode = $state(new Set<string>());
 	let loadError = $state<string | null>(null);
 	let isImporting = $state(false);
 	let importSummary = $state<{
@@ -72,17 +87,25 @@
 
 	let choiceDecisions = $state<ChoiceDecisions>(new Map());
 	let assetDecisions = $state<AssetDecisions>(new Map());
+	// Files that will overwrite, as found when the package was analysed. Rows are
+	// grouped by this, not by the live destination, so a row never jumps groups
+	// (and loses focus) while you type its path; the row itself shows the live state.
+	let overwritesAtLoad = $state(new Set<string>());
 	let pastedContent = $state("");
 	let isAnalyzing = $state(false);
 	let analysisToken = $state(0);
 	let hasImported = $state(false);
+	let importSummaryEl = $state<HTMLElement | null>(null);
 
 	const requiresAck = $derived(
 		preview ? requiresAcknowledgement(preview) : false,
 	);
-	const fullyReviewed = $derived(
-		preview ? isFullyReviewed(preview, reviewedScriptPaths) : true,
+	const unreviewedCount = $derived(
+		preview
+			? unreviewedScriptCount(preview, reviewedScriptPaths, reviewedChoiceIds)
+			: 0,
 	);
+	const fullyReviewed = $derived(unreviewedCount === 0);
 	const previewChoiceById = $derived(
 		new Map(
 			(preview?.choices ?? []).map((choice) => [choice.choiceId, choice]),
@@ -99,23 +122,6 @@
 			(preview.summary.hasCritical || preview.summary.hasWarning),
 		),
 	);
-	const canImport = $derived(
-		Boolean(loadedPackage && analysis) &&
-			// A re-paste keeps the previous package live until its analysis
-			// resolves; block Import in that window so a stale package can't be
-			// written while new content is being analysed.
-			!isAnalyzing &&
-			(!requiresAck || (acknowledged && fullyReviewed)),
-	);
-
-	const criticalScriptCount = $derived(
-		preview?.criticalScriptPaths.length ?? 0,
-	);
-	const hasUnbundledScript = $derived(
-		preview?.missingReferences.some((ref) => ref.asScript) ?? false,
-	);
-	// The checkbox only claims a script review when there are bundled scripts to
-	// open; otherwise the copy stays honest about why no code is shown.
 	const importSummaryText = $derived.by(() => {
 		const s = importSummary;
 		if (!s) return "";
@@ -134,16 +140,6 @@
 			: t("Nothing was imported.");
 	});
 
-	const ackLabel = $derived(
-		criticalScriptCount > 0
-			? hasUnbundledScript
-				? t("I have reviewed each bundled script above and trust the source, including scripts that are not included and cannot be shown.")
-				: t("I have reviewed each script above and trust the source.")
-			: hasUnbundledScript
-				? t("This package runs scripts that are not included and cannot be reviewed. I trust the source.")
-				: t("I understand this package can run code, and I trust the source."),
-	);
-
 	function markReviewed(path: string) {
 		if (reviewedScriptPaths.has(path)) return;
 		const next = new Set(reviewedScriptPaths);
@@ -158,58 +154,92 @@
 		expandedMacros = next;
 	}
 
+	function toggleCode(choiceId: string) {
+		const next = new Set(expandedCode);
+		if (next.has(choiceId)) next.delete(choiceId);
+		else next.add(choiceId);
+		expandedCode = next;
+		if (next.has(choiceId) && !reviewedChoiceIds.has(choiceId))
+			reviewedChoiceIds = new Set(reviewedChoiceIds).add(choiceId);
+	}
+
 	const optimisticExists: ExistsProbe = (path) =>
 		existence().optimistic(path);
 
 	const fileRows = $derived(
-		(analysis?.assetConflicts ?? []).map((conflict) => ({
-			conflict,
-			state: resolveAssetDecision(
+		(analysis?.assetConflicts ?? []).map((conflict) => {
+			const state = resolveAssetDecision(
 				assetDecisions,
 				conflict,
 				defaultAssetDestination,
 				optimisticExists,
-			),
-			file: previewFileByPath.get(conflict.originalPath),
-		})),
+			);
+			return {
+				conflict,
+				state,
+				destinationIsFolder:
+					state.mode !== "skip" &&
+					existence().isFolder(state.destinationPath),
+				file: previewFileByPath.get(conflict.originalPath),
+			};
+		}),
 	);
 	const addedFileRows = $derived(
-		fileRows.filter((row) => !row.state.destinationExists),
+		fileRows.filter((row) => !overwritesAtLoad.has(row.conflict.originalPath)),
 	);
 	const overwriteFileRows = $derived(
-		fileRows.filter((row) => row.state.destinationExists),
+		fileRows.filter((row) => overwritesAtLoad.has(row.conflict.originalPath)),
 	);
 
+	const canImport = $derived(
+		Boolean(loadedPackage && analysis) &&
+			// A re-paste keeps the previous package live until its analysis
+			// resolves; block Import in that window so a stale package can't be
+			// written while new content is being analysed.
+			!isAnalyzing &&
+			!fileRows.some((row) => row.destinationIsFolder) &&
+			(!requiresAck || (acknowledged && fullyReviewed)),
+	);
+
+	// Said beside the button, since what blocks it is usually scrolled out of view.
+	const blockedReason = $derived.by(() => {
+		if (!loadedPackage || !analysis || isAnalyzing || hasImported) return "";
+		if (requiresAck && !fullyReviewed)
+			return t("View {count} scripts above to import.", { count: unreviewedCount });
+		if (requiresAck && !acknowledged)
+			return t("Confirm the acknowledgement above to import.");
+		if (fileRows.some((row) => row.destinationIsFolder))
+			return t("A destination above is a folder. Add a file name to import.");
+		return "";
+	});
+
 	function defaultAssetDestination(conflict: AssetConflict): string {
-		// Default imported templates into the first configured template folder.
-		// normalizeTemplateFolderPaths drops blanks and trailing slashes, so the
-		// primary entry is already a clean folder path.
-		const [templateFolder] = normalizeTemplateFolderPaths(
+		return defaultAssetDestinationFor(
+			conflict,
 			settingsStore.getState().templateFolderPaths,
 		);
-		const needsTemplateFolder =
-			conflict.kind === "template" ||
-			conflict.kind === "capture-template";
-
-		if (templateFolder && needsTemplateFolder) {
-			const baseName =
-				conflict.originalPath.split("/").pop() ?? conflict.originalPath;
-			return `${templateFolder}/${baseName}`;
-		}
-
-		return conflict.originalPath;
 	}
 
 	// Reconcile a destination against the authoritative adapter.exists (which sees
 	// config/dot-folder files the vault index omits) and correct the stored
 	// decision when it differs.
-	function scheduleExists(originalPath: string, effectivePath: string) {
+	function scheduleExists(
+		originalPath: string,
+		effectivePath: string,
+		regroup = false,
+	) {
 		existence().schedule(originalPath, effectivePath, (exists) => {
 			assetDecisions = applyExistsResult(
 				assetDecisions,
 				originalPath,
 				exists,
 			);
+			if (regroup && exists !== overwritesAtLoad.has(originalPath)) {
+				const next = new Set(overwritesAtLoad);
+				if (exists) next.add(originalPath);
+				else next.delete(originalPath);
+				overwritesAtLoad = next;
+			}
 		});
 	}
 
@@ -217,6 +247,7 @@
 		if (!analysis) {
 			choiceDecisions = new Map();
 			assetDecisions = new Map();
+			overwritesAtLoad = new Set();
 			return;
 		}
 		choiceDecisions = initChoiceDecisions(analysis.choiceConflicts);
@@ -225,10 +256,22 @@
 			defaultAssetDestination,
 			optimisticExists,
 		);
+		overwritesAtLoad = new Set(
+			analysis.assetConflicts
+				.filter(
+					(conflict) =>
+						assetDecisions.get(conflict.originalPath)?.destinationExists,
+				)
+				.map((conflict) => conflict.originalPath),
+		);
 		for (const conflict of analysis.assetConflicts) {
 			const decision = assetDecisions.get(conflict.originalPath);
 			if (decision)
-				scheduleExists(conflict.originalPath, decision.destinationPath);
+				scheduleExists(
+					conflict.originalPath,
+					decision.destinationPath,
+					true,
+				);
 		}
 	}
 
@@ -266,7 +309,9 @@
 		preview = null;
 		acknowledged = false;
 		reviewedScriptPaths = new Set();
+		reviewedChoiceIds = new Set();
 		expandedMacros = new Set();
+		expandedCode = new Set();
 	}
 
 	async function analyzePastedContent(raw: string) {
@@ -328,11 +373,6 @@
 		void analyzePastedContent(value);
 	}
 
-	function formatPathHint(pathHint: string[]): string {
-		if (!pathHint || pathHint.length === 0) return t("Root");
-		return pathHint.slice(0, -1).join(" › ") || t("Root");
-	}
-
 	async function handleImport() {
 		if (hasImported) {
 			new Notice(t("This package has already been imported."));
@@ -347,9 +387,10 @@
 		isImporting = true;
 		importSummary = null;
 		try {
+			const previousChoices = settingsStore.getState().choices;
 			const result = await applyPackageImport({
 				app,
-				existingChoices: settingsStore.getState().choices,
+				existingChoices: previousChoices,
 				aiProviders: settingsStore.getState().ai.providers,
 				pkg: loadedPackage.pkg,
 				choiceDecisions: snapshotChoiceDecisions(
@@ -367,6 +408,7 @@
 				...state,
 				choices: result.updatedChoices,
 			}));
+			onImported?.(result, previousChoices);
 
 			importSummary = {
 				added: result.addedChoiceIds.length,
@@ -388,169 +430,72 @@
 		} finally {
 			isImporting = false;
 		}
+
+		if (!hasImported) return;
+		// The result renders at the end of the scrolling body, below the review
+		// you just finished; bring it into view above the footer.
+		await tick();
+		importSummaryEl?.scrollIntoView({ block: "nearest" });
 	}
 </script>
 
-<div class="importPackageModal">
-	<header>
-		<h2>{t("Import QuickAdd package")}</h2>
-		<p>{t("Review what this package adds and runs before importing.")}</p>
-	</header>
-
-	<section class="pasteSection">
-		<label>
-			<span>{t("Paste package JSON")}</span>
+<div class="qa-package-dialog">
+	<div class="qa-package-body">
+		<section class="qa-import-paste">
+			<label class="qa-visually-hidden" for="qa-import-json">{t("Package JSON")}</label>
 			<textarea
+				id="qa-import-json"
 				bind:value={pastedContent}
 				oninput={handleContentInput}
 				placeholder={t("Paste the contents of a .quickadd.json package here")}
 				rows="8"
 			></textarea>
-		</label>
-		{#if loadError}
-			<div class="errorMessage">{loadError}</div>
-		{:else if isAnalyzing}
-			<div class="info">{t("Analyzing package…")}</div>
-		{/if}
-	</section>
-
-	{#if loadedPackage && analysis}
-		<section class="packageMeta">
-			<span
-				><span class="metaLabel">{t("Version")}</span>
-				{loadedPackage.pkg.quickAddVersion}</span
-			>
-			<span class="metaSep" aria-hidden="true">·</span>
-			<span
-				><span class="metaLabel">{t("Created")}</span>
-				{new Date(
-					loadedPackage.pkg.createdAt,
-				).toLocaleDateString()}</span
-			>
-			<span class="metaSep" aria-hidden="true">·</span>
-			<span
-				>{t("{count} choices", { count: analysis.choiceConflicts.length })}</span
-			>
-			<span class="metaSep" aria-hidden="true">·</span>
-			<span
-				>{t("{count} files", { count: loadedPackage.pkg.assets.length })}</span
-			>
-		</section>
-
-		{#if showBanner && preview}
-			<CapabilityBanner {preview} />
-		{/if}
-
-		<section class="choicesSection">
-			<h3>{t("Choices")}</h3>
-			{#if analysis.choiceConflicts.length === 0}
-				<p>{t("No choices found in this package.")}</p>
-			{:else}
-				<table>
-					<colgroup>
-						<col class="colName" />
-						<col class="colLocation" />
-						<col class="colAction" />
-					</colgroup>
-					<thead>
-						<tr>
-							<th>{t("Name")}</th>
-							<th>{t("Location")}</th>
-							<th>{t("Action")}</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each analysis.choiceConflicts as conflict (conflict.choiceId)}
-							{@const effectiveMode = effectiveChoiceMode(
-								choiceDecisions.get(conflict.choiceId) ??
-									"import",
-								conflict.exists,
-							)}
-							{@const pc = previewChoiceById.get(
-								conflict.choiceId,
-							)}
-							{@const hasMacro = (pc?.commands?.length ?? 0) > 0}
-							<tr>
-								<td data-label={t("Name")}>
-									<div class="choiceName">
-										{conflict.name}
-									</div>
-									{#if conflict.exists}
-										<div class="choiceExists">
-											{t("already in vault")}
-										</div>
-									{/if}
-									{#if hasMacro}
-										<button
-											type="button"
-											class="macroToggle"
-											aria-expanded={expandedMacros.has(
-												conflict.choiceId,
-											)}
-											onclick={() =>
-												toggleMacro(conflict.choiceId)}
-										>
-											{expandedMacros.has(
-												conflict.choiceId,
-											)
-												? t("Hide macro")
-												: t("Show macro")}
-										</button>
-									{/if}
-								</td>
-								<td data-label={t("Location")}
-									>{formatPathHint(conflict.pathHint)}</td
-								>
-								<td data-label={t("Action")}>
-									<select
-										class="dropdown"
-										value={effectiveMode}
-										onchange={(event) =>
-											onChoiceModeChange(
-												conflict.choiceId,
-												event,
-											)}
-									>
-										<option value="import">{t("Import")}</option>
-										{#if conflict.exists}
-											<option value="overwrite"
-												>{t("Overwrite")}</option
-											>
-										{/if}
-										<option value="duplicate"
-											>{t("Duplicate")}</option
-										>
-										<option value="skip">{t("Skip")}</option>
-									</select>
-								</td>
-							</tr>
-							{#if hasMacro && expandedMacros.has(conflict.choiceId)}
-								<tr class="macroRow">
-									<td colspan="3">
-										<MacroDisclosure
-											commands={pc?.commands ?? []}
-										/>
-									</td>
-								</tr>
-							{/if}
-						{/each}
-					</tbody>
-				</table>
+			{#if loadError}
+				<p class="qa-import-status mod-error">{loadError}</p>
+			{:else if isAnalyzing}
+				<p class="qa-import-status">{t("Analyzing package…")}</p>
+			{:else if loadedPackage && analysis}
+				<p class="qa-import-status">
+					{t("Version")} {loadedPackage.pkg.quickAddVersion} · {t("Created")} {new Date(
+						loadedPackage.pkg.createdAt,
+					).toLocaleDateString()} · {t("{count} choices", { count: analysis.choiceConflicts.length })} · {t("{count} files", { count: loadedPackage.pkg.assets.length })}
+				</p>
 			{/if}
 		</section>
 
-		{#if loadedPackage}
-			<section class="filesSection">
-				<h3>{t("Files")}</h3>
+		{#if loadedPackage && analysis}
+			{#if showBanner && preview}
+				<CapabilityBanner {preview} />
+			{/if}
+
+			<ImportChoices conflicts={analysis.choiceConflicts} {choiceDecisions}
+				{previewChoiceById} {expandedMacros} {toggleMacro} {expandedCode}
+				{reviewedChoiceIds} {toggleCode} {onChoiceModeChange} />
+
+			<section class="setting-group qa-import-files">
+				<div class="setting-item setting-item-heading">
+					<div class="setting-item-name">{t("Files")}</div>
+				</div>
 				{#if fileRows.length === 0}
-					<p>{t("No files bundled with this package.")}</p>
+					<div class="setting-items">
+						<div class="setting-item mod-empty-state">
+							<div class="setting-item-info">
+								<div class="setting-item-name">
+									{t("No files bundled with this package.")}
+								</div>
+							</div>
+						</div>
+					</div>
 				{:else}
-					{#if addedFileRows.length > 0}
-						<h4 class="filesGroupHeading">
-							{t("Added ({count})", { count: addedFileRows.length })}
-						</h4>
-						<div class="fileRows">
-							{#each addedFileRows as row (row.conflict.originalPath)}
+					{#each [
+						{ label: t("Added"), rows: addedFileRows, overwrite: false },
+						{ label: t("Will overwrite"), rows: overwriteFileRows, overwrite: true },
+					] as group (group.label)}
+						{#if group.rows.length > 0}
+							<h4 class="qa-import-files-group" class:mod-warning={group.overwrite}>
+								{group.label} ({group.rows.length})
+							</h4>
+							{#each group.rows as row (row.conflict.originalPath)}
 								{#if row.file}
 									<FilePreviewRow
 										file={row.file}
@@ -560,6 +505,7 @@
 											.destinationPath}
 										destinationExists={row.state
 											.destinationExists}
+										destinationIsFolder={row.destinationIsFolder}
 										onPathInput={(value) =>
 											updateAssetPath(
 												row.conflict,
@@ -577,132 +523,52 @@
 									/>
 								{/if}
 							{/each}
-						</div>
-					{/if}
-					{#if overwriteFileRows.length > 0}
-						<h4 class="filesGroupHeading overwrite">
-							{t("Will overwrite ({count})", { count: overwriteFileRows.length })}
-						</h4>
-						<div class="fileRows">
-							{#each overwriteFileRows as row (row.conflict.originalPath)}
-								{#if row.file}
-									<FilePreviewRow
-										file={row.file}
-										pkg={loadedPackage.pkg}
-										mode={row.state.mode}
-										destinationPath={row.state
-											.destinationPath}
-										destinationExists={row.state
-											.destinationExists}
-										onPathInput={(value) =>
-											updateAssetPath(
-												row.conflict,
-												value,
-											)}
-										onModeChange={(mode) =>
-											updateAssetMode(
-												row.conflict.originalPath,
-												mode,
-											)}
-										reviewed={reviewedScriptPaths.has(
-											row.file.originalPath,
-										)}
-										onReviewed={markReviewed}
-									/>
-								{/if}
-							{/each}
-						</div>
-					{/if}
+						{/if}
+					{/each}
 				{/if}
 			</section>
 
-			{#if preview && (preview.missingReferences.length > 0 || preview.orphanAssets.length > 0)}
-				<section class="warningsBand">
-					{#if preview.missingReferences.length > 0}
-						<div class="warnItem">
-							<h4>{t("Missing files")}</h4>
-							<ul>
-								{#each preview.missingReferences as ref (ref.path)}
-									<li class:script={ref.asScript}>
-										<code>{ref.path}</code>:
-										{ref.asScript
-											? t("not bundled, so it runs from whatever file exists at that path after import")
-											: t("not bundled and not in your vault")}
-										<span class="warnLoc"
-											>{ref.breadcrumb}</span
-										>
-									</li>
-								{/each}
-							</ul>
+			<PackageWarnings {preview} />
+
+			{#if importSummary}
+				<section
+					class="callout qa-import-summary"
+					data-callout="success"
+					role="status"
+					bind:this={importSummaryEl}
+				>
+					<div class="callout-title">
+						<div class="callout-icon">
+							<ObsidianIcon iconId="check" />
 						</div>
-					{/if}
-					{#if preview.orphanAssets.length > 0}
-						<div class="warnItem">
-							<h4>{t("Unreferenced files")}</h4>
-							<ul>
-								{#each preview.orphanAssets as path (path)}
-									<li>
-										<code>{path}</code>: {t("bundled but not used by any choice")}
-									</li>
-								{/each}
-							</ul>
-						</div>
-					{/if}
+						<div class="callout-title-inner">{importSummaryText}</div>
+					</div>
 				</section>
 			{/if}
 		{/if}
 
-		{#if importSummary}
-			<section class="summary">
-				<ObsidianIcon iconId="check-circle" size={16} />
-				<span>{importSummaryText}</span>
-			</section>
+		{#if loadedPackage && requiresAck && !hasImported}
+			<ImportAcknowledgement {preview} {fullyReviewed}
+				reasonId={blockedReason ? "qa-import-reason" : undefined}
+				bind:acknowledged />
 		{/if}
-	{/if}
+	</div>
 
-	{#if loadedPackage && requiresAck && !hasImported}
-		<section class="ackGate" class:critical={preview?.summary.hasCritical}>
-			<label class="ackGate-label">
-				<input
-					id="qa-import-ack-checkbox"
-					type="checkbox"
-					checked={acknowledged}
-					disabled={!fullyReviewed}
-					aria-describedby={criticalScriptCount > 0 && !fullyReviewed
-						? "qa-import-ack-hint"
-						: undefined}
-					onchange={(event) =>
-						(acknowledged = (
-							event.currentTarget as HTMLInputElement
-						).checked)}
-				/>
-				<span>{ackLabel}</span>
-			</label>
-			{#if criticalScriptCount > 0 && !fullyReviewed}
-				<p id="qa-import-ack-hint" class="ackGate-hint">
-					{t("Open “View contents” on each of the {count} executable scripts above to enable this.", { count: criticalScriptCount })}
-				</p>
-			{/if}
-		</section>
-	{/if}
-
-	<section class="footer">
-		<button
-			type="button"
-			onclick={close}
-			class="secondary"
-			disabled={isImporting}
-		>
-			{t("Cancel")}
-		</button>
+	<div class="modal-button-container">
+		{#if blockedReason}
+			<p id="qa-import-reason" class="qa-import-reason">{blockedReason}</p>
+		{/if}
+		{#if !hasImported}
+			<button type="button" onclick={close} disabled={isImporting}>
+				{t("Cancel")}
+			</button>
+		{/if}
 		<button
 			type="button"
 			onclick={hasImported ? close : handleImport}
-			class="primary"
+			class="mod-cta"
 			disabled={isImporting || (!hasImported && !canImport)}
-			title={!hasImported && requiresAck && fullyReviewed && !acknowledged
-				? t("Confirm the acknowledgement above to continue")
-				: undefined}
+			aria-describedby={blockedReason ? "qa-import-reason" : undefined}
 		>
 			{#if isImporting}
 				{t("Importing…")}
@@ -712,382 +578,78 @@
 				{t("Import package")}
 			{/if}
 		</button>
-	</section>
+	</div>
 </div>
 
 <style>
-	.importPackageModal {
+	.qa-import-paste {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
-		width: min(720px, 100%);
-		max-height: 80vh;
-		overflow-y: auto;
-		/* overflow-x:hidden (paired with overflow-y:auto) clips child focus rings
-		   at the flush left/right edges; the inline padding gives the ring room. */
-		overflow-x: hidden;
-		box-sizing: border-box;
-		padding: 2px 4px;
+		gap: var(--size-4-2);
 	}
 
-	.importPackageModal * {
-		box-sizing: border-box;
-	}
-
-	.importPackageModal > section {
-		max-width: 100%;
-	}
-
-	.pasteSection label {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-	}
-
-	.pasteSection textarea {
+	.qa-import-paste textarea {
 		width: 100%;
 		font-family: var(--font-monospace);
+		font-size: var(--font-ui-small);
 		resize: vertical;
 	}
 
-	.errorMessage {
+	.qa-import-status {
+		margin: 0;
+		font-size: var(--font-ui-smaller);
+		color: var(--text-muted);
+		overflow-wrap: anywhere;
+	}
+
+	.qa-import-status.mod-error {
 		color: var(--text-error);
 	}
 
-	.info {
-		color: var(--text-muted);
-	}
-
-	/* A single compact line that sizes to content and wraps naturally, instead
-	   of a 4-equal-column grid where the date wraps to 3 lines and the rest
-	   leave dead space. */
-	.packageMeta {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: baseline;
-		gap: 0.3rem 0.6rem;
-		padding: 0.55rem 0.75rem;
-		border: 1px solid var(--background-modifier-border);
-		border-radius: var(--radius-m, 8px);
-		width: 100%;
-		font-size: var(--font-ui-small, 0.9rem);
-		overflow-wrap: anywhere;
-	}
-
-	.metaLabel {
-		color: var(--text-muted);
-	}
-
-	.metaSep {
-		color: var(--text-faint);
-	}
-
-	.choicesSection,
-	.filesSection {
+	.qa-import-files {
 		display: flex;
 		flex-direction: column;
-		gap: 0.75rem;
+		gap: var(--size-4-3);
 	}
 
-	.filesGroupHeading {
+	.qa-import-files .setting-item-heading {
+		margin-bottom: var(--size-4-1);
+	}
+
+	/* Small muted group label, like Obsidian's settings sidebar sections. */
+	.qa-import-files-group {
+		margin: var(--size-4-2) 0 0;
+		padding: 0 var(--size-4-4);
+		font-size: var(--font-ui-smaller);
+		font-weight: var(--font-semibold);
+		color: var(--text-muted);
+	}
+
+	.qa-import-files-group:first-of-type {
+		margin-top: 0;
+	}
+
+	.qa-import-files-group.mod-warning {
+		color: var(--text-warning);
+	}
+
+	.qa-import-summary {
 		margin: 0;
-		font-size: var(--font-ui-small, 0.9rem);
-		font-weight: 600;
-		color: var(--text-muted);
 	}
 
-	.filesGroupHeading.overwrite {
-		color: var(--text-error);
-	}
-
-	.fileRows {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-	}
-
-	.choiceName {
-		font-weight: 500;
-	}
-
-	/* A plain inline text link, not a chrome button: neutralise Obsidian's
-	   default button background/shadow on every state (!important to win over
-	   the global button:hover / :focus rules that paint the grey box). */
-	.macroToggle {
-		display: inline-block;
-		margin-top: 0.35rem;
-		padding: 0;
-		background: transparent !important;
-		border: none;
-		box-shadow: none !important;
-		color: var(--text-accent);
-		cursor: pointer;
-		font-size: var(--font-ui-smaller, 0.8rem);
-		border-radius: var(--radius-s, 4px);
-	}
-
-	.macroToggle:hover {
-		color: var(--interactive-accent-hover, var(--text-accent));
-		text-decoration: underline;
-	}
-
-	.macroToggle:focus-visible {
-		outline: 2px solid var(--interactive-accent);
-		outline-offset: 2px;
-	}
-
-	.macroRow td {
-		background: var(--background-primary-alt, var(--background-secondary));
-	}
-
-	.warningsBand {
-		display: flex;
-		flex-direction: column;
-		border: 1px solid var(--background-modifier-border);
-		border-radius: var(--radius-m, 8px);
-		padding: 0.6rem 0.75rem;
-		gap: 0.5rem;
-	}
-
-	.warnItem h4 {
+	/* Left of the buttons; the text wraps before they do. */
+	.qa-import-reason {
+		flex: 1 1 0;
+		align-self: center;
 		margin: 0;
-		font-size: var(--font-ui-small, 0.9rem);
-	}
-
-	.warnItem ul {
-		margin: 0.25rem 0 0;
-		padding-left: 1rem;
-	}
-
-	.warnItem li {
-		overflow-wrap: anywhere;
-	}
-
-	/* A missing SCRIPT reference is an execution-hijack risk, not a broken
-	   link: it runs from whatever exists at that path. Mark it as critical. */
-	.warnItem li.script {
-		padding: 0.25rem 0.4rem;
-		border-radius: var(--radius-s, 4px);
-		background: var(--qa-sev-critical-wash);
-	}
-
-	.warnLoc {
-		color: var(--text-muted);
-		font-size: var(--font-ui-smaller, 0.8rem);
-	}
-
-	.choicesSection table {
-		width: 100%;
-		border-collapse: collapse;
-		table-layout: fixed;
-	}
-
-	.choicesSection col.colName {
-		width: 52%;
-	}
-
-	.choicesSection col.colLocation {
-		width: 26%;
-	}
-
-	.choicesSection col.colAction {
-		width: 22%;
-	}
-
-	.choicesSection th,
-	.choicesSection td {
-		padding: 0.5rem;
-		border-bottom: 1px solid var(--background-modifier-border);
-		text-align: left;
-		word-break: break-word;
-		overflow-wrap: anywhere;
-		white-space: normal;
-		vertical-align: top;
-	}
-
-	.choicesSection th {
-		font-size: var(--font-ui-smaller, 0.8rem);
-		color: var(--text-muted);
-		font-weight: 600;
-	}
-
-	.choiceExists {
-		font-size: var(--font-ui-smaller, 0.8rem);
-		color: var(--text-muted);
-		margin-top: 0.1rem;
-	}
-
-	.choicesSection tbody tr:not(.macroRow):hover td {
-		background: var(--background-modifier-hover);
-	}
-
-	.choicesSection select {
-		max-width: 100%;
-	}
-
-	/* Narrow viewports (mobile): a 3-column table can't breathe, so each row
-	   becomes a stacked card with the column name as an inline label. */
-	@media (max-width: 500px) {
-		.choicesSection thead {
-			display: none;
-		}
-
-		.choicesSection table,
-		.choicesSection tbody,
-		.choicesSection tr,
-		.choicesSection td {
-			display: block;
-			width: 100%;
-		}
-
-		.choicesSection tbody tr:not(.macroRow) {
-			border: 1px solid var(--background-modifier-border);
-			border-radius: var(--radius-m, 8px);
-			padding: 0.5rem 0.6rem;
-			margin-bottom: 0.5rem;
-		}
-
-		.choicesSection td {
-			border-bottom: none;
-			padding: 0.15rem 0;
-		}
-
-		.choicesSection td[data-label="Location"]::before,
-		.choicesSection td[data-label="Action"]::before {
-			content: attr(data-label) ": ";
-			font-weight: 600;
-			color: var(--text-muted);
-		}
-
-		.choicesSection td[data-label="Action"] {
-			display: flex;
-			align-items: center;
-			gap: 0.4rem;
-			margin-top: 0.25rem;
-		}
-
-		.choicesSection td[data-label="Action"] select {
-			flex: 1;
-		}
-
-		.macroRow td {
-			padding: 0.25rem 0;
-		}
-	}
-
-	.summary {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		padding: 0.55rem 0.7rem;
-		border-radius: var(--radius-m, 8px);
-		border: 1px solid var(--qa-sev-success-border);
-		background: var(--qa-sev-success-wash);
-		color: var(--text-normal);
-	}
-
-	.summary :global(.quickadd-icon) {
-		color: var(--text-success, var(--color-green, #0aa344));
-		flex-shrink: 0;
-	}
-
-	.ackGate {
-		display: flex;
-		flex-direction: column;
-		gap: 0.4rem;
-		padding: 0.75rem;
-		border: 1px solid var(--background-modifier-border);
-		border-radius: var(--radius-m, 8px);
-		background: var(--background-secondary);
-	}
-
-	.ackGate.critical {
-		border-color: var(--qa-sev-critical-border);
-	}
-
-	.ackGate-label {
-		display: flex;
-		align-items: flex-start;
-		gap: 0.5rem;
-		font-weight: 600;
-		cursor: pointer;
-	}
-
-	.ackGate-label:has(input:disabled) {
-		cursor: not-allowed;
-		opacity: 0.6;
-	}
-
-	.ackGate-label input {
-		margin-top: 0.2rem;
-		flex-shrink: 0;
-	}
-
-	.ackGate-label input:focus-visible {
-		outline: 2px solid var(--interactive-accent);
-		outline-offset: 2px;
-	}
-
-	.ackGate-hint {
-		margin: 0;
-		font-size: var(--font-ui-smaller, 0.8rem);
+		font-size: var(--font-ui-smaller);
 		color: var(--text-muted);
 	}
 
-	.footer {
-		display: flex;
-		justify-content: flex-end;
-		gap: 0.5rem;
-		margin-top: 0.5rem;
-	}
-
-	.footer .primary {
-		background: var(--interactive-accent);
-		color: var(--text-on-accent);
-	}
-
-	.footer .primary:hover:not(:disabled) {
-		background: var(--interactive-accent-hover);
-	}
-
-	.footer .primary:active:not(:disabled),
-	.footer .secondary:active:not(:disabled) {
-		transform: translateY(1px);
-	}
-
-	.footer .secondary {
-		background: transparent;
-	}
-
-	.footer .secondary:hover:not(:disabled) {
-		background: var(--background-modifier-hover);
-	}
-
-	.footer .secondary:focus-visible {
-		outline: 2px solid var(--interactive-accent);
-		outline-offset: 2px;
-	}
-
-	/* Accent background needs a light outline to stay visible. */
-	.footer .primary:focus-visible {
-		outline: 2px solid var(--text-on-accent);
-		outline-offset: -4px;
-	}
-
-	:global(.is-mobile) .macroToggle {
-		min-height: 36px;
-		padding: 0.4rem 0.3rem;
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.footer .primary,
-		.footer .secondary {
-			transition: none;
-		}
-
-		.footer .primary:active:not(:disabled),
-		.footer .secondary:active:not(:disabled) {
-			transform: none;
-		}
+	/* The phone footer stacks its buttons bottom-up; put the reason on top. */
+	:global(.is-phone) .qa-import-reason {
+		flex: none;
+		order: 1;
+		text-align: center;
 	}
 </style>

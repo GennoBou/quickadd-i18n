@@ -1,6 +1,5 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("obsidian-dataview", () => ({ getAPI: vi.fn() }));
 
 import { App } from "obsidian";
 import { render } from "@testing-library/svelte";

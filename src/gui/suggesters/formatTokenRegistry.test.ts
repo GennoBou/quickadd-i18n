@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import {
 	ensureObsidianDomPolyfills,
@@ -129,11 +130,21 @@ describe("format token autocomplete rows", () => {
 		);
 	});
 
-	it("offers the tokens that had no matcher at all before (#1542)", async () => {
+	it("offers {{PROPERTY}} for note content with a plain-language current-value blurb", async () => {
 		const index = await suggestInserts("{{");
-		expect(index).toContain("{{FIELD:}}");
-		expect(index).toContain("{{TIME:}}");
-		expect(index).toContain("{{FILE:}}");
+		expect(index).toContain("{{PROPERTY}}");
+		const rows = await suggestRows("{{PROP", VAULT);
+		const property = rows.find((row) => row.insert === "{{PROPERTY}}");
+		expect(property?.description).toMatch(/property's current value/i);
+		expect(property?.description).toMatch(/property Captures only/i);
+		expect(property?.description).not.toMatch(/property name/i);
+	});
+
+	it("does not offer {{PROPERTY}} in path or line-target fields", async () => {
+		for (const context of ["captureTarget", "fileName", "lineTarget"] as const) {
+			expect(await suggestInserts("{{", { ...VAULT, context })).not.toContain("{{PROPERTY}}");
+			expect(await suggestInserts("{{PROP", { ...VAULT, context })).not.toContain("{{PROPERTY}}");
+		}
 	});
 });
 
@@ -166,6 +177,15 @@ describe("format token autocomplete context gating", () => {
 			}
 		});
 	}
+
+	it("offers a periodic note's |link where a link is content, and only its path in a Capture target", async () => {
+		for (const period of ["DAILY", "WEEKLY", "MONTHLY", "QUARTERLY", "YEARLY"]) {
+			const typed = `{{${period.toLowerCase()}|`;
+			expect(await suggestInserts(typed, { context: "noteContent" })).toContain(`{{${period}|link}}`);
+			expect(await suggestInserts(`{{${period.slice(0, 3)}`, { context: "captureTarget" })).toContain(`{{${period}}}`);
+			expect(await suggestInserts(`{{${period.slice(0, 3)}`, { context: "captureTarget" })).not.toContain(`{{${period}|link}}`);
+		}
+	});
 
 	it("keeps {{FOLDERCURRENT}} where it does resolve", async () => {
 		expect(await suggestInserts("{{", { context: "captureTarget" })).toContain(
@@ -247,5 +267,15 @@ describe("format token insertion", () => {
 		const { value, selection } = await accept("Note {{file", "{{FILE:<folder>}}");
 		expect(value).toBe("Note {{FILE:<folder>}}");
 		expect(value.slice(selection[0], selection[1])).toBe("<folder>");
+	});
+});
+
+
+describe("Capture cursor autocomplete", () => {
+	it.each(["{{", "{{c", "{{cu", "{{CURSOR"])("offers the marker at %s only in note content", async prefix => {
+		expect(await suggestInserts(prefix, { context: "noteContent" })).toContain("{{CURSOR}}");
+		for (const context of ["propertyValue", "captureTarget", "fileName", "lineTarget"] as const) {
+			expect(await suggestInserts(prefix, { context })).not.toContain("{{CURSOR}}");
+		}
 	});
 });

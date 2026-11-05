@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,8 +7,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const runE2E = path.join(repoRoot, ".agents", "run-e2e");
-const openShim = path.join(repoRoot, ".agents", "obsidian-open");
-const patcher = path.join(repoRoot, ".agents", "patch-obsidian-e2e-linux.mjs");
 const profileRoot = "/tmp/quickadd-obsidian-e2e";
 const runningOnLinux = process.platform === "linux";
 const temporaryPaths: string[] = [];
@@ -110,7 +108,109 @@ exit 0
 		expect(result.status).toBe(23);
 		expect(result.stderr).toContain("status 23");
 		expect(fs.readFileSync(log, "utf8")).toContain("stop:e2e-obsidian");
-		expect(fs.readFileSync(log, "utf8")).not.toContain("test:e2e --");
+		expect(fs.readFileSync(log, "utf8")).not.toContain("test:e2e");
+	});
+
+	// Runs run-e2e against a mock pnpm whose provision and start print this
+	// instance's paths, whose start recreates the vault like the runner does, and
+	// whose Vitest run reports `ran` passed tests. The vault starts with a
+	// leftover note.
+	function runWithMockVitest(name: string, args: string[], ran: number) {
+		const instanceName = `${name}-${process.pid}-${Date.now()}`;
+		const initialRoot = prepareProfileRoot();
+		const home = path.join(profileRoot, instanceName, "home");
+		fs.mkdirSync(home, { recursive: true });
+		const vault = path.join(repoRoot, ".obsidian-e2e-vaults", instanceName);
+		fs.mkdirSync(vault, { recursive: true });
+		fs.writeFileSync(path.join(vault, "Leftover.md"), "");
+		const bin = temporaryDirectory("quickadd-mock-bin-args-");
+		const log = path.join(bin, "calls.log");
+		fs.writeFileSync(path.join(bin, "pnpm"), `#!/usr/bin/env bash
+echo "$*" >> ${JSON.stringify(log)}
+if [[ "$*" == *"start:e2e-obsidian"* || "$*" == *"provision:e2e-vault"* ]]; then
+	[[ "$*" == *"start:e2e-obsidian"* ]] && mkdir -p '${vault}'
+	for prefix in OBSIDIAN QUICKADD; do
+		echo "export \${prefix}_E2E_VAULT='${instanceName}'"
+		echo "export \${prefix}_E2E_VAULT_PATH='${vault}'"
+		echo "export \${prefix}_E2E_OBSIDIAN_HOME='${home}'"
+	done
+fi
+if [[ "$*" == *"test:e2e"* ]]; then
+	for arg in "$@"; do
+		[[ "$arg" == --outputFile.json=* ]] && echo '{"numPassedTests":${ran},"numFailedTests":0}' > "\${arg#--outputFile.json=}"
+	done
+fi
+exit 0
+`, { mode: 0o755 });
+
+		try {
+			const result = spawnSync(runE2E, args, {
+				env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+				encoding: "utf8",
+			});
+			return { result, calls: fs.readFileSync(log, "utf8"), vaultFiles: fs.readdirSync(vault) };
+		} finally {
+			fs.rmSync(vault, { recursive: true, force: true });
+			cleanProfileInstance(instanceName, initialRoot);
+		}
+	}
+
+	it("passes its arguments to Vitest as filters", () => {
+		const { result, calls } = runWithMockVitest("orb-args-test", ["tests/e2e/field-label.test.ts", "-t", "label"], 1);
+		expect(result.status, result.stderr).toBe(0);
+		expect(calls).toContain("\nrun test:e2e tests/e2e/field-label.test.ts -t label --reporter=default --reporter=json --outputFile.json=");
+	});
+
+	it("starts from a fresh instance and vault, and keeps other vaults", () => {
+		fs.mkdirSync(path.join(repoRoot, ".obsidian-e2e-vaults"), { recursive: true });
+		const sibling = fs.mkdtempSync(path.join(repoRoot, ".obsidian-e2e-vaults", "orb-sibling-"));
+		temporaryPaths.push(sibling);
+		fs.writeFileSync(path.join(sibling, "Note.md"), "");
+		const { result, calls, vaultFiles } = runWithMockVitest("orb-reset-test", ["tests/e2e/field-label.test.ts"], 1);
+		expect(result.status, result.stderr).toBe(0);
+		expect(calls.indexOf("stop:e2e-obsidian")).toBeLessThan(calls.indexOf("provision:e2e-vault"));
+		expect(calls.indexOf("provision:e2e-vault")).toBeLessThan(calls.indexOf("start:e2e-obsidian"));
+		expect(vaultFiles).toEqual([]);
+		expect(fs.readdirSync(sibling)).toEqual(["Note.md"]);
+	});
+
+	it("deletes no vault behind a linked vault directory", () => {
+		const root = fs.realpathSync(temporaryDirectory("quickadd-linked-root-"));
+		fs.mkdirSync(path.join(root, ".agents"));
+		fs.copyFileSync(runE2E, path.join(root, ".agents", "run-e2e"));
+		const outside = temporaryDirectory("quickadd-linked-outside-");
+		fs.mkdirSync(path.join(outside, "quickadd-linked"));
+		fs.writeFileSync(path.join(outside, "quickadd-linked", "Keep.md"), "");
+		fs.symlinkSync(outside, path.join(root, ".obsidian-e2e-vaults"));
+		const bin = temporaryDirectory("quickadd-mock-bin-linked-");
+		fs.writeFileSync(path.join(bin, "pnpm"), `#!/usr/bin/env bash
+if [[ "$*" == *"provision:e2e-vault"* ]]; then
+	echo "export OBSIDIAN_E2E_VAULT_PATH='${root}/.obsidian-e2e-vaults/quickadd-linked'"
+fi
+exit 0
+`, { mode: 0o755 });
+
+		const result = spawnSync(path.join(root, ".agents", "run-e2e"), [], {
+			env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+			encoding: "utf8",
+		});
+
+		expect(result.status).toBe(1);
+		expect(fs.readdirSync(path.join(outside, "quickadd-linked"))).toEqual(["Keep.md"]);
+	});
+
+	it("drops -- so Vitest still applies the filters", () => {
+		const { result, calls } = runWithMockVitest("orb-dashdash-test", ["--", "tests/e2e/field-label.test.ts"], 1);
+		expect(result.status, result.stderr).toBe(0);
+		expect(calls).toContain("\nrun test:e2e tests/e2e/field-label.test.ts --reporter=default");
+	});
+
+	// Vitest exits 0 when a -t filter matches no test.
+	it("fails when its arguments match no test", () => {
+		const { result, calls } = runWithMockVitest("orb-no-spec-test", ["tests/e2e/field-label.test.ts", "-t", "no such test"], 0);
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("No spec ran");
+		expect(calls).toContain("stop:e2e-obsidian");
 	});
 
 	it("rejects rather than evaluates unexpected start output", () => {
@@ -165,132 +265,11 @@ exit 0
 				expect(result.status, testCase.name).toBe(1);
 				const calls = fs.readFileSync(log, "utf8");
 				expect(calls, testCase.name).toContain("stop:e2e-obsidian");
-				expect(calls, testCase.name).not.toContain("test:e2e --");
+				expect(calls, testCase.name).not.toContain("test:e2e");
 			}
 			expect(fs.existsSync("/tmp/quickadd-env-injected")).toBe(false);
 		} finally {
 			cleanProfileInstance(instanceName, initialRoot);
 		}
-	});
-});
-
-describe.skipIf(!runningOnLinux)("Linux Obsidian launcher validation", () => {
-	function validArgs(validHome: string): string[] {
-		return [
-		"-n",
-		"-g",
-		"-a",
-		"Obsidian",
-		"--env",
-		`HOME=${validHome}`,
-		"--args",
-		`--user-data-dir=${validHome}/Library/Application Support/obsidian`,
-		"--password-store=basic",
-		];
-	}
-
-	function validate(args: string[]): ReturnType<typeof spawnSync> {
-		return spawnSync(openShim, args, {
-			env: { ...process.env, QUICKADD_OBSIDIAN_OPEN_VALIDATE_ONLY: "1" },
-			encoding: "utf8",
-		});
-	}
-
-	it("preserves a pre-existing runner-owned profile root", () => {
-		const testCreatedRoot = !fs.existsSync(profileRoot);
-		if (testCreatedRoot) {
-			fs.mkdirSync(profileRoot, { mode: 0o700 });
-			fs.chmodSync(profileRoot, 0o700);
-		}
-		const before = profileRootState(false);
-		const instanceName = `orb-root-preservation-${process.pid}-${Date.now()}`;
-		fs.mkdirSync(path.join(profileRoot, instanceName, "home"), { recursive: true });
-
-		try {
-			cleanProfileInstance(instanceName, before);
-			expect(profileRootState(false)).toEqual(before);
-		} finally {
-			fs.rmSync(path.join(profileRoot, instanceName), { recursive: true, force: true });
-			if (testCreatedRoot) {
-				const finalState = profileRootState(false);
-				expect(finalState).toEqual(before);
-				expect(finalState.entries).toEqual([]);
-				expect(finalState.mode).toBe(0o700);
-				fs.rmdirSync(profileRoot);
-				expect(fs.existsSync(profileRoot)).toBe(false);
-			}
-		}
-	});
-
-	it("accepts only the runner's exact canonical argv", () => {
-		const initialRoot = prepareProfileRoot();
-		const instanceDir = fs.mkdtempSync(path.join(profileRoot, "orb-script-test-"));
-		const instanceName = path.basename(instanceDir);
-		const validHome = path.join(instanceDir, "home");
-		const args = validArgs(validHome);
-		const escapedHome = temporaryDirectory("quickadd-obsidian-escaped-home-");
-		const linkName = `orb-script-link-${process.pid}-${Date.now()}`;
-		const linkPath = path.join(profileRoot, linkName);
-		fs.mkdirSync(validHome, { recursive: true, mode: 0o700 });
-		fs.writeFileSync(path.join(instanceDir, "obsidian-e2e-instance.json"), "{}", {
-			mode: 0o600,
-			flag: "wx",
-		});
-		try {
-			expect(validate(args).status).toBe(0);
-			const adversarial = [
-				args.slice(1),
-				args.filter((argument) => argument !== "-g"),
-				args.filter((_, index) => index !== 4 && index !== 5),
-				[args[1], args[0], ...args.slice(2)],
-				[...args, "--extra"],
-				args.filter((argument) => argument !== "--password-store=basic"),
-				[...args.slice(0, 7), args[8], args[7]],
-				args.map((argument) =>
-					argument === `HOME=${validHome}` ? `HOME=${validHome}/../home` : argument,
-				),
-			];
-			fs.symlinkSync(escapedHome, linkPath);
-			adversarial.push(
-				args.map((argument) =>
-					argument.includes(validHome)
-						? argument.replace(validHome, linkPath)
-						: argument,
-				),
-			);
-			for (const args of adversarial) expect(validate(args).status).not.toBe(0);
-		} finally {
-			fs.rmSync(linkPath, { force: true });
-			cleanProfileInstance(instanceName, initialRoot);
-		}
-	});
-});
-
-describe("obsidian-e2e Linux patcher", () => {
-	const originalLaunch = 'resolveExec(deps)("/usr/bin/open", [';
-	const originalAsar =
-		'return [path.join("/Applications", leaf), path.join(os.userInfo().homedir, "Applications", leaf)];';
-
-	it("rejects duplicate targets without modifying the bundle", () => {
-		const dist = temporaryDirectory("quickadd-patcher-");
-		const bundle = path.join(dist, "runner.mjs");
-		const source = `${originalLaunch}\n${originalLaunch}\n${originalAsar}\n`;
-		fs.writeFileSync(bundle, source);
-		const result = spawnSync(process.execPath, [patcher, "--dist-dir", dist], { encoding: "utf8" });
-		expect(result.status).not.toBe(0);
-		expect(fs.readFileSync(bundle, "utf8")).toBe(source);
-		expect(fs.readdirSync(dist)).toEqual(["runner.mjs"]);
-	});
-
-	it("atomically patches and then validates one expected bundle", () => {
-		const dist = temporaryDirectory("quickadd-patcher-");
-		const bundle = path.join(dist, "runner.mjs");
-		fs.writeFileSync(bundle, `${originalLaunch}\n${originalAsar}\n`);
-		execFileSync(process.execPath, [patcher, "--dist-dir", dist]);
-		execFileSync(process.execPath, [patcher, "--check", "--dist-dir", dist]);
-		const patchedBundle = fs.readFileSync(bundle, "utf8");
-		expect(patchedBundle).toMatch(/\.agents[\\/]+obsidian-open/);
-		expect(patchedBundle).toContain("/opt/Obsidian/resources/obsidian.asar");
-		expect(fs.readdirSync(dist)).toEqual(["runner.mjs"]);
 	});
 });

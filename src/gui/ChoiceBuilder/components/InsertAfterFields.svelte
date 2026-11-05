@@ -85,26 +85,26 @@ const createLocationOptions = $derived(
 				{ value: CREATE_IF_NOT_FOUND_CURSOR, label: t("Cursor") },
 				{
 					value: CREATE_IF_NOT_FOUND_ORDERED,
-					label: t("Ordered (place new section among siblings)"),
+					label: t("Ordered among siblings"),
 				},
 			],
 );
 
-const orderByOptions = $derived([
+const orderByOptions = [
 	{ value: "insertion", label: t("Insertion order (no sorting)") },
 	{ value: "lexical", label: t("Text (A→Z)") },
 	{ value: "numeric", label: t("Number") },
 	{ value: "date", label: t("Date") },
 	{ value: "semver", label: t("Version (semver)") },
-]);
-const orderDirectionOptions = $derived([
+];
+const orderDirectionOptions = [
 	{ value: "desc", label: t("Newest / highest first") },
 	{ value: "asc", label: t("Oldest / lowest first") },
-]);
-const unparseableOptions = $derived([
-	{ value: "bottom", label: t("Sort existing unparseable headings to bottom") },
-	{ value: "top", label: t("Sort existing unparseable headings to top") },
-]);
+];
+const unparseableOptions = [
+	{ value: "bottom", label: t("Sort to bottom") },
+	{ value: "top", label: t("Sort to top") },
+];
 
 // Tracks whether the ordering descriptor is "pinned" — either the user explicitly
 // chose a sort key / date format, or the choice arrived already carrying an
@@ -359,6 +359,7 @@ function onPromptHeadingToggle(value: boolean) {
 		<Dropdown
 			value={insertAfter.createIfNotFoundLocation || CREATE_IF_NOT_FOUND_TOP}
 			options={createLocationOptions}
+			ariaLabel="Where to create the line"
 			onchange={onCreateLocationChange}
 		/>
 	{/snippet}
@@ -423,6 +424,7 @@ function onPromptHeadingToggle(value: boolean) {
 				<Dropdown
 					value={ordering.unparseable ?? "bottom"}
 					options={unparseableOptions}
+					ariaLabel="Existing unparseable headings"
 					onchange={(value) => {
 						if (insertAfter.orderBy)
 							insertAfter.orderBy.unparseable =

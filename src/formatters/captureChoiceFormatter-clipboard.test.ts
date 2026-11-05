@@ -1,66 +1,35 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { App, TFile } from "obsidian";
+import { restoreUserText } from "./helpers/userText";
 
 vi.mock("obsidian", () => ({
 	MarkdownView: class {},
 	normalizePath: (path: string) => path.replace(/\\/g, "/").replace(/\/+/g, "/"),
 }));
 
-vi.mock("../utilityObsidian", () => ({
-	templaterParseTemplate: vi.fn().mockResolvedValue(null),
-}));
+vi.mock("../utils/templaterIntegration", async () => (await import("../../tests/helpers/formatters/mocks")).templaterIntegrationMock());
 
-vi.mock("../gui/InputPrompt", () => ({
-	__esModule: true,
-	default: class {
-		factory() {
-			return {
-				Prompt: vi.fn().mockResolvedValue(""),
-				PromptWithContext: vi.fn().mockResolvedValue(""),
-			};
-		}
-	},
-}));
+vi.mock("../gui/InputPrompt", async () => (await import("../../tests/helpers/formatters/mocks")).InputPromptMock());
 
 vi.mock("src/gui/GenericInputPrompt/GenericInputPrompt", () => ({
 	__esModule: true,
-	default: { PromptWithContext: vi.fn().mockResolvedValue("") },
+	default: { Prompt: vi.fn().mockResolvedValue("") },
 }));
 
-vi.mock("src/gui/InputSuggester/inputSuggester", () => ({
-	__esModule: true,
-	default: { Suggest: vi.fn().mockResolvedValue("") },
-}));
+vi.mock("src/gui/InputSuggester/inputSuggester", async () => (await import("../../tests/helpers/formatters/mocks")).genericSuggesterMock());
 
 vi.mock("src/gui/MultiSuggester/multiSuggester", () => ({
 	__esModule: true,
 	default: { Suggest: vi.fn().mockResolvedValue([]) },
 }));
 
-vi.mock("src/gui/VDateInputPrompt/VDateInputPrompt", () => ({
-	__esModule: true,
-	default: { Prompt: vi.fn().mockResolvedValue("") },
-}));
+vi.mock("src/gui/VDateInputPrompt/VDateInputPrompt", async () => (await import("../../tests/helpers/formatters/mocks")).VDateInputPromptMock());
 
-vi.mock("../gui/GenericSuggester/genericSuggester", () => ({
-	__esModule: true,
-	default: { Suggest: vi.fn().mockResolvedValue("") },
-}));
+vi.mock("../gui/GenericSuggester/genericSuggester", async () => (await import("../../tests/helpers/formatters/mocks")).genericSuggesterMock());
 
-vi.mock("../gui/MathModal", () => ({
-	__esModule: true,
-	MathModal: { Prompt: vi.fn().mockResolvedValue("") },
-}));
+vi.mock("../gui/MathModal", async () => (await import("../../tests/helpers/formatters/mocks")).MathModalMock());
 
-vi.mock("../engine/SingleInlineScriptEngine", () => ({
-	__esModule: true,
-	SingleInlineScriptEngine: class {
-		public params = { variables: {} as Record<string, unknown> };
-		async runAndGetOutput() {
-			return "";
-		}
-	},
-}));
+vi.mock("../engine/SingleInlineScriptEngine", async () => (await import("../../tests/helpers/formatters/mocks")).SingleInlineScriptEngineMock());
 
 vi.mock("../engine/SingleMacroEngine", () => ({
 	__esModule: true,
@@ -89,18 +58,7 @@ vi.mock("../engine/SingleTemplateEngine", () => ({
 	},
 }));
 
-vi.mock("obsidian-dataview", () => ({
-	__esModule: true,
-	getAPI: vi.fn().mockReturnValue(null),
-}));
-
-vi.mock("../logger/logManager", () => ({
-	log: {
-		logError: vi.fn(),
-		logWarning: vi.fn(),
-		logMessage: vi.fn(),
-	},
-}));
+vi.mock("../logger/logManager", async () => (await import("../../tests/helpers/formatters/mocks")).logManagerMock());
 
 import { CaptureChoiceFormatter } from "./captureChoiceFormatter";
 import { settingsStore } from "../settingsStore";
@@ -268,7 +226,8 @@ describe("CaptureChoiceFormatter clipboard image support", () => {
 
 		const result = await formatter.formatContentOnly("A {{clipboard}} B");
 
-		expect(result).toBe("A {{clipboard}} B");
+		// The engine restores the text once it has placed it.
+		expect(restoreUserText(result)).toBe("A {{clipboard}} B");
 	});
 
 	it("keeps image fallback disabled for file name formatting", async () => {

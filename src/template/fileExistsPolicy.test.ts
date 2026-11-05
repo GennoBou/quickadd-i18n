@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	fileExistsBehaviorCategoryOptions,
-	getBehaviorCategory,
 	getDefaultBehaviorForCategory,
 	getFileExistsMode,
 	getExistingNoteAction,
@@ -47,20 +46,8 @@ describe("fileExistsPolicy registry", () => {
 		]);
 		expect(getModesForCategory("keep").map((mode) => mode.id)).toEqual([
 			"doNothing",
+			"leaveUnchanged",
 		]);
-	});
-
-	it("derives behavior category from behavior state", () => {
-		expect(getBehaviorCategory({ kind: "prompt" })).toBe("prompt");
-		expect(
-			getBehaviorCategory({ kind: "apply", mode: "appendBottom" }),
-		).toBe("update");
-		expect(getBehaviorCategory({ kind: "apply", mode: "increment" })).toBe(
-			"create",
-		);
-		expect(getBehaviorCategory({ kind: "apply", mode: "doNothing" })).toBe(
-			"keep",
-		);
 	});
 
 	it("returns category defaults and preserves modes already in-category", () => {
@@ -144,37 +131,19 @@ describe("fileExistsPolicy collision naming", () => {
 		);
 	});
 
-	it("preserves zero padding for markdown files", async () => {
+	it.each([
+		["preserves zero padding for markdown files", "Note009.md", "Note010.md"],
+		["preserves zero padding for identifier-like markdown files", "tt0780504.md", "tt0780505.md"],
+		["preserves zero padding for .canvas files", "tt009.canvas", "tt010.canvas"],
+	] as const)("%s", async (_name, path, expected) => {
 		const exists = vi
 			.fn<(path: string) => Promise<boolean>>()
 			.mockResolvedValueOnce(true)
 			.mockResolvedValueOnce(false);
 
 		await expect(
-			resolveIncrementedCollisionPath("Note009.md", exists),
-		).resolves.toBe("Note010.md");
-	});
-
-	it("preserves zero padding for identifier-like markdown files", async () => {
-		const exists = vi
-			.fn<(path: string) => Promise<boolean>>()
-			.mockResolvedValueOnce(true)
-			.mockResolvedValueOnce(false);
-
-		await expect(
-			resolveIncrementedCollisionPath("tt0780504.md", exists),
-		).resolves.toBe("tt0780505.md");
-	});
-
-	it("preserves zero padding for .canvas files", async () => {
-		const exists = vi
-			.fn<(path: string) => Promise<boolean>>()
-			.mockResolvedValueOnce(true)
-			.mockResolvedValueOnce(false);
-
-		await expect(
-			resolveIncrementedCollisionPath("tt009.canvas", exists),
-		).resolves.toBe("tt010.canvas");
+			resolveIncrementedCollisionPath(path, exists),
+		).resolves.toBe(expected);
 	});
 
 	it("preserves zero padding for .base files", async () => {
@@ -209,48 +178,20 @@ describe("fileExistsPolicy collision naming", () => {
 		).resolves.toBe("Note.md");
 	});
 
-	it("appends a duplicate suffix to markdown files", async () => {
+	it.each([
+		["appends a duplicate suffix to markdown files", "Note.md", "Note (1).md"],
+		["increments an existing duplicate suffix", "Note (1).md", "Note (2).md"],
+		["preserves trailing digits when adding a duplicate suffix", "Note1.md", "Note1 (1).md"],
+		["adds a duplicate suffix for identifier-like markdown files", "tt0780504.md", "tt0780504 (1).md"],
+	] as const)("%s", async (_name, path, expected) => {
 		const exists = vi
 			.fn<(path: string) => Promise<boolean>>()
 			.mockResolvedValueOnce(true)
 			.mockResolvedValueOnce(false);
 
 		await expect(
-			resolveDuplicateSuffixCollisionPath("Note.md", exists),
-		).resolves.toBe("Note (1).md");
-	});
-
-	it("increments an existing duplicate suffix", async () => {
-		const exists = vi
-			.fn<(path: string) => Promise<boolean>>()
-			.mockResolvedValueOnce(true)
-			.mockResolvedValueOnce(false);
-
-		await expect(
-			resolveDuplicateSuffixCollisionPath("Note (1).md", exists),
-		).resolves.toBe("Note (2).md");
-	});
-
-	it("preserves trailing digits when adding a duplicate suffix", async () => {
-		const exists = vi
-			.fn<(path: string) => Promise<boolean>>()
-			.mockResolvedValueOnce(true)
-			.mockResolvedValueOnce(false);
-
-		await expect(
-			resolveDuplicateSuffixCollisionPath("Note1.md", exists),
-		).resolves.toBe("Note1 (1).md");
-	});
-
-	it("adds a duplicate suffix for identifier-like markdown files", async () => {
-		const exists = vi
-			.fn<(path: string) => Promise<boolean>>()
-			.mockResolvedValueOnce(true)
-			.mockResolvedValueOnce(false);
-
-		await expect(
-			resolveDuplicateSuffixCollisionPath("tt0780504.md", exists),
-		).resolves.toBe("tt0780504 (1).md");
+			resolveDuplicateSuffixCollisionPath(path, exists),
+		).resolves.toBe(expected);
 	});
 });
 

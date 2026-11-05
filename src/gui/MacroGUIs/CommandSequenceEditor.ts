@@ -5,6 +5,7 @@ import type {
 } from "obsidian";
 import { ButtonComponent, Notice, Setting } from "obsidian";
 import CommandList from "./CommandList.svelte";
+import { editorCommands } from "./editorCommands";
 import {
 	createCommandListProps,
 	type CommandListProps,
@@ -22,35 +23,25 @@ import { CaptureChoice } from "../../types/choices/CaptureChoice";
 import { TemplateChoice } from "../../types/choices/TemplateChoice";
 import {
 	type ScriptCandidate,
-	candidateLabel,
+	candidateLabels,
 	loadScriptCandidates,
 	noteScriptError,
 	resolveScriptSelector,
 } from "./scriptCandidates";
 import { UserScript } from "../../types/macros/UserScript";
 import { GenericTextSuggester } from "../suggesters/genericTextSuggester";
-import GenericYesNoPrompt from "../GenericYesNoPrompt/GenericYesNoPrompt";
+import { confirmAction } from "../confirmAction";
 import { showNoScriptsFoundNotice } from "./noScriptsFoundNotice";
 import InputSuggester from "../InputSuggester/inputSuggester";
+import { renderNotePathSuggestion } from "../InputSuggester/renderNotePathSuggestion";
+import { buildFileDisplayInfos } from "../../utils/fileSyntax";
 import { log } from "../../logger/logManager";
-import type { IEditorCommand } from "../../types/macros/EditorCommands/IEditorCommand";
-import { EditorCommandType } from "../../types/macros/EditorCommands/EditorCommandType";
-import { CopyCommand } from "../../types/macros/EditorCommands/CopyCommand";
-import { CutCommand } from "../../types/macros/EditorCommands/CutCommand";
-import { PasteCommand } from "../../types/macros/EditorCommands/PasteCommand";
-import { PasteWithFormatCommand } from "../../types/macros/EditorCommands/PasteWithFormatCommand";
-import { SelectActiveLineCommand } from "../../types/macros/EditorCommands/SelectActiveLineCommand";
-import { SelectLinkOnActiveLineCommand } from "../../types/macros/EditorCommands/SelectLinkOnActiveLineCommand";
-import { MoveCursorToFileStartCommand } from "../../types/macros/EditorCommands/MoveCursorToFileStartCommand";
-import { MoveCursorToFileEndCommand } from "../../types/macros/EditorCommands/MoveCursorToFileEndCommand";
-import { MoveCursorToLineStartCommand } from "../../types/macros/EditorCommands/MoveCursorToLineStartCommand";
-import { MoveCursorToLineEndCommand } from "../../types/macros/EditorCommands/MoveCursorToLineEndCommand";
+import { reportingHandler } from "../../utils/errorUtils";
 import { AIAssistantCommand } from "../../types/macros/QuickCommands/AIAssistantCommand";
-import type { IconType } from "../../types/IconType";
 import { settingsStore } from "../../settingsStore";
 import { OpenFileCommand } from "../../types/macros/QuickCommands/OpenFileCommand";
 import type { IConditionalCommand } from "../../types/macros/Conditional/IConditionalCommand";
-import { getUserScriptMemberAccess } from "../../utilityObsidian";
+import { getUserScriptMemberAccess } from "../../utils/userScript";
 import { ConditionalCommand } from "../../types/macros/Conditional/ConditionalCommand";
 import { clearUserScriptSecretsFromCommand } from "../../utils/userScriptSecrets";
 import {
@@ -60,15 +51,20 @@ import {
 import DataUnreadable from "../svelte/DataUnreadable.svelte";
 import { t } from "../../i18n";
 
-type ConditionalHandler = (command: IConditionalCommand) => Promise<boolean>;
+/**
+ * Opens a branch's commands as a page. Mutates the command when the page is
+ * left and then calls `onEdited`, synchronously, so the edit is saved before
+ * the page under it saves (see BuilderPage).
+ */
+type BranchHandler = (command: IConditionalCommand, onEdited: () => void) => void;
 
 export interface CommandSequenceEditorConditionalHandlers {
-	configureCondition?: ConditionalHandler;
-	editThenBranch?: ConditionalHandler;
-	editElseBranch?: ConditionalHandler;
+	configureCondition?: (command: IConditionalCommand) => Promise<boolean>;
+	editThenBranch?: BranchHandler;
+	editElseBranch?: BranchHandler;
 }
 
-export interface CommandSequenceEditorOptions {
+interface CommandSequenceEditorOptions {
 	app: App;
 	plugin: QuickAdd;
 	/**
@@ -108,7 +104,7 @@ export class CommandSequenceEditor {
 		this.plugin = options.plugin;
 		// data.json is untrusted, so the value arrives raw and is made editable
 		// here — the one seam every host that shows a command list goes through
-		// (MacroBuilder, ConditionalBranchEditorModal). Normalizing keeps a
+		// (MacroBuilder, ConditionalBranchEditorPage). Normalizing keeps a
 		// duplicate-id or id-less command under a fresh uuid instead of letting
 		// the keyed {#each} throw and cost the user the whole editor (#1593).
 		// Nothing is persisted by this: the repair reaches disk only with the
@@ -126,7 +122,7 @@ export class CommandSequenceEditor {
 	/**
 	 * @returns whether the editor is fully usable. False means the command list is
 	 * showing a card instead, and the host must not commit `commandsRef` anywhere
-	 * (see ConditionalBranchEditorModal's Save button).
+	 * (see ConditionalBranchEditorPage.result).
 	 */
 	public render(containerEl: HTMLElement): boolean {
 		this.destroy();
@@ -208,11 +204,11 @@ export class CommandSequenceEditor {
 					throw new Error("command not found");
 				}
 
-				const promptAnswer: boolean = await GenericYesNoPrompt.Prompt(
-					this.app,
-					t("Are you sure you wish to delete this command?"),
-					t("If you click yes, you will delete '{name}'.", { name: command.name })
-				);
+				const promptAnswer = await confirmAction(this.app, {
+					title: t("Delete '{name}'?", { name: command.name }),
+					message: t("The command will be removed from this macro."),
+					action: t("Delete"),
+				});
 				if (!promptAnswer) return;
 
 				const secretsCleared = await clearUserScriptSecretsFromCommand(
@@ -257,12 +253,32 @@ export class CommandSequenceEditor {
 
 		this.addChoiceButton(quickCommandContainer, "Capture", CaptureChoice);
 		this.addChoiceButton(quickCommandContainer, "Template", TemplateChoice);
-		this.addOpenFileCommandButton(quickCommandContainer);
-		this.addWaitCommandButton(quickCommandContainer);
-		this.addConditionalCommandButton(quickCommandContainer);
+		this.addCommandButton(
+			quickCommandContainer,
+			"file-search",
+			t("Add open file command"),
+			() => new OpenFileCommand(),
+		);
+		this.addCommandButton(
+			quickCommandContainer,
+			"clock",
+			t("Add wait command"),
+			() => new WaitCommand(100),
+		);
+		this.addCommandButton(
+			quickCommandContainer,
+			"git-branch",
+			t("Add conditional command"),
+			() => new ConditionalCommand(),
+		);
 
 		if (!settingsStore.getState().disableOnlineFeatures) {
-			this.addAIAssistantCommandButton(quickCommandContainer);
+			this.addCommandButton(
+				quickCommandContainer,
+				"bot",
+				t("Add AI Assistant command"),
+				() => new AIAssistantCommand(),
+			);
 		}
 	}
 
@@ -271,6 +287,7 @@ export class CommandSequenceEditor {
 
 		const addObsidianCommandFromInput = () => {
 			const value: string = input.getValue();
+			if (!value.trim()) return;
 			const obsidianCommand = this.obsidianCommands.find((v) => v.name === value);
 
 			if (!obsidianCommand) {
@@ -293,22 +310,11 @@ export class CommandSequenceEditor {
 			.setName(t("Obsidian command"))
 			.setDesc(t("Add an Obsidian command"))
 			.addText((textComponent) => {
-				input = textComponent;
-				textComponent.inputEl.addClass("qa-command-sequence-input");
-				textComponent.setPlaceholder(t("Obsidian command"));
-				new GenericTextSuggester(
-					this.app,
-					textComponent.inputEl,
-					this.obsidianCommands.map((c) => c.name)
-				);
-
-				textComponent.inputEl.addEventListener(
-					"keypress",
-					(e: KeyboardEvent) => {
-						if (e.key === "Enter") {
-							addObsidianCommandFromInput();
-						}
-					}
+				input = this.configureSuggestedInput(
+					textComponent,
+					t("Obsidian command"),
+					this.obsidianCommands.map((c) => c.name),
+					addObsidianCommandFromInput,
 				);
 			})
 			.addButton((button) =>
@@ -320,47 +326,13 @@ export class CommandSequenceEditor {
 		let dropdownComponent: DropdownComponent;
 
 		const addEditorCommandFromDropdown = () => {
-			const type: EditorCommandType =
-				dropdownComponent.getValue() as EditorCommandType;
-			let command: IEditorCommand;
-
-			switch (type) {
-				case EditorCommandType.Copy:
-					command = new CopyCommand();
-					break;
-				case EditorCommandType.Cut:
-					command = new CutCommand();
-					break;
-				case EditorCommandType.Paste:
-					command = new PasteCommand();
-					break;
-				case EditorCommandType.PasteWithFormat:
-					command = new PasteWithFormatCommand();
-					break;
-				case EditorCommandType.SelectActiveLine:
-					command = new SelectActiveLineCommand();
-					break;
-				case EditorCommandType.SelectLinkOnActiveLine:
-					command = new SelectLinkOnActiveLineCommand();
-					break;
-				case EditorCommandType.MoveCursorToFileStart:
-					command = new MoveCursorToFileStartCommand();
-					break;
-				case EditorCommandType.MoveCursorToFileEnd:
-					command = new MoveCursorToFileEndCommand();
-					break;
-				case EditorCommandType.MoveCursorToLineStart:
-					command = new MoveCursorToLineStartCommand();
-					break;
-				case EditorCommandType.MoveCursorToLineEnd:
-					command = new MoveCursorToLineEndCommand();
-					break;
-				default:
-					log.logError("invalid editor command type");
-					throw new Error("invalid editor command type");
+			if (!dropdownComponent.getValue()) return;
+			const Command = editorCommands.get(dropdownComponent.getValue());
+			if (!Command) {
+				log.logError("invalid editor command type");
+				throw new Error("invalid editor command type");
 			}
-
-			this.addCommand(command);
+			this.addCommand(new Command());
 			dropdownComponent.setValue("");
 		};
 
@@ -370,39 +342,8 @@ export class CommandSequenceEditor {
 			.addDropdown((dropdown) => {
 				dropdownComponent = dropdown;
 				dropdown.selectEl.addClass("qa-command-sequence-input");
-				dropdown
-					.addOption("", t("Select command"))
-					.addOption(EditorCommandType.Copy, EditorCommandType.Copy)
-					.addOption(EditorCommandType.Cut, EditorCommandType.Cut)
-					.addOption(EditorCommandType.Paste, EditorCommandType.Paste)
-					.addOption(
-						EditorCommandType.PasteWithFormat,
-						EditorCommandType.PasteWithFormat
-					)
-					.addOption(
-						EditorCommandType.SelectActiveLine,
-						EditorCommandType.SelectActiveLine
-					)
-					.addOption(
-						EditorCommandType.SelectLinkOnActiveLine,
-						EditorCommandType.SelectLinkOnActiveLine
-					)
-					.addOption(
-						EditorCommandType.MoveCursorToFileStart,
-						EditorCommandType.MoveCursorToFileStart
-					)
-					.addOption(
-						EditorCommandType.MoveCursorToFileEnd,
-						EditorCommandType.MoveCursorToFileEnd
-					)
-					.addOption(
-						EditorCommandType.MoveCursorToLineStart,
-						EditorCommandType.MoveCursorToLineStart
-					)
-					.addOption(
-						EditorCommandType.MoveCursorToLineEnd,
-						EditorCommandType.MoveCursorToLineEnd
-					);
+				dropdown.addOption("", t("Select command"));
+				for (const type of editorCommands.keys()) dropdown.addOption(type, type);
 			})
 			.addButton((button) =>
 				button.setCta().setButtonText(t("Add")).onClick(addEditorCommandFromDropdown)
@@ -455,38 +396,23 @@ export class CommandSequenceEditor {
 			.setName(t("User scripts"))
 			.setDesc(t("Add a .js file or a note with a ```js code block - type the name or click Browse"))
 			.addText((textComponent) => {
-				input = textComponent;
-				textComponent.inputEl.addClass("qa-command-sequence-input");
-				textComponent.setPlaceholder(t("Start typing script name..."));
-
-				new GenericTextSuggester(
-					this.app,
-					textComponent.inputEl,
-					this.scriptCandidates.map((c) => candidateLabel(c))
-				);
-
-				textComponent.inputEl.addEventListener(
-					"keypress",
-					(e: KeyboardEvent) => {
-						if (e.key === "Enter") {
-							void addUserScriptFromInput();
-						}
-					}
+				input = this.configureSuggestedInput(
+					textComponent,
+					t("Start typing script name..."),
+					candidateLabels(this.scriptCandidates),
+					addUserScriptFromInput,
 				);
 			})
 			.addButton((button) =>
 				button
 					.setButtonText(t("Browse"))
 					.setTooltip(t("Browse and select a script (.js file or note)"))
-					.onClick(async () => {
-						const selected = await this.showScriptPicker();
-						if (selected) {
-							const name = selected.isMarkdown
-								? selected.file.path
-								: selected.file.basename;
-							this.addCommand(new UserScript(name, selected.file.path));
-						}
-					})
+					// Obsidian drops the click handler's promise: without this, pressing
+					// Escape in the picker is an unhandled rejection.
+					.onClick(reportingHandler(t("Couldn't add that script"), async () => {
+						const script = await this.showScriptPicker();
+						if (script) this.addCommand(script);
+					}))
 			)
 			.addButton((button) => {
 				addButton = button;
@@ -508,6 +434,7 @@ export class CommandSequenceEditor {
 
 		const addChoiceFromInput = () => {
 			const value: string = input.getValue();
+			if (!value.trim()) return;
 			const choice = this.choices.find((c) => c.name === value);
 			if (!choice) {
 				new Notice(t("QuickAdd: No choice named \"{name}\".", { name: value }));
@@ -523,24 +450,31 @@ export class CommandSequenceEditor {
 			.setName(t("Choices"))
 			.setDesc(t("Add existing choice"))
 			.addText((textComponent) => {
-				input = textComponent;
-				textComponent.inputEl.addClass("qa-command-sequence-input");
-				textComponent.setPlaceholder(t("Choice"));
-				new GenericTextSuggester(
-					this.app,
-					textComponent.inputEl,
-					this.choices.map((c) => c.name)
+				input = this.configureSuggestedInput(
+					textComponent,
+					t("Choice"),
+					this.choices.map((c) => c.name),
+					addChoiceFromInput,
 				);
-
-				textComponent.inputEl.addEventListener("keypress", (e: KeyboardEvent) => {
-					if (e.key === "Enter") {
-						addChoiceFromInput();
-					}
-				});
 			})
 			.addButton((button) =>
 				button.setCta().setButtonText(t("Add")).onClick(addChoiceFromInput)
 			);
+	}
+
+	private configureSuggestedInput(
+		input: TextComponent,
+		placeholder: string,
+		suggestions: string[],
+		add: () => void | Promise<void>,
+	): TextComponent {
+		input.inputEl.addClass("qa-command-sequence-input");
+		input.setPlaceholder(placeholder);
+		new GenericTextSuggester(this.app, input.inputEl, suggestions);
+		input.inputEl.addEventListener("keypress", (event: KeyboardEvent) => {
+			if (event.key === "Enter") void add();
+		});
+		return input;
 	}
 
 	private addChoiceButton(
@@ -561,47 +495,19 @@ export class CommandSequenceEditor {
 			});
 	}
 
-	private addOpenFileCommandButton(container: HTMLDivElement) {
-		const button: ButtonComponent = new ButtonComponent(container);
-		button
-			.setIcon("file-search")
-			.setTooltip(t("Add open file command"))
-			.onClick(() => {
-				this.addCommand(new OpenFileCommand());
-			});
+	private addCommandButton(
+		container: HTMLDivElement,
+		icon: string,
+		tooltip: string,
+		create: () => ICommand,
+	) {
+		new ButtonComponent(container)
+			.setIcon(icon)
+			.setTooltip(tooltip)
+			.onClick(() => this.addCommand(create()));
 	}
 
-	private addAIAssistantCommandButton(container: HTMLDivElement) {
-		const button: ButtonComponent = new ButtonComponent(container);
-		button
-			.setIcon("bot" as IconType)
-			.setTooltip(t("Add AI Assistant command"))
-			.onClick(() => {
-				this.addCommand(new AIAssistantCommand());
-			});
-	}
-
-	private addWaitCommandButton(container: HTMLDivElement) {
-		const button: ButtonComponent = new ButtonComponent(container);
-		button
-			.setIcon("clock")
-			.setTooltip(t("Add wait command"))
-			.onClick(() => {
-				this.addCommand(new WaitCommand(100));
-			});
-	}
-
-	private addConditionalCommandButton(container: HTMLDivElement) {
-		const button: ButtonComponent = new ButtonComponent(container);
-		button
-			.setIcon("git-branch")
-			.setTooltip(t("Add conditional command"))
-			.onClick(() => {
-				this.addCommand(new ConditionalCommand());
-			});
-	}
-
-	private async showScriptPicker(): Promise<ScriptCandidate | null> {
+	private async showScriptPicker(): Promise<UserScript | null> {
 		// Refresh so scripts/notes created while this editor is open are listed.
 		this.loadScriptCandidates();
 		if (this.scriptCandidates.length === 0) {
@@ -610,24 +516,33 @@ export class CommandSequenceEditor {
 		}
 
 		// One unified list: .js paths and notes-with-a-code-block, keyed by path.
+		// Rows show the name with the full path beneath it, and search matches
+		// both, so same-named scripts in different folders can be told apart and
+		// a note is found by the name its row shows.
 		const paths = this.scriptCandidates.map((c) => c.file.path);
-		const labels = this.scriptCandidates.map((c) => candidateLabel(c));
+		const labels = candidateLabels(this.scriptCandidates);
+		const titles = buildFileDisplayInfos(
+			this.scriptCandidates.map((c) => c.file),
+			(file) => this.app.metadataCache.getFileCache(file),
+		);
 		const selectedPath = await InputSuggester.Suggest(
 			this.app,
 			labels,
 			paths,
 			{
 				placeholder: t("Select a script (.js file or note with a ```js block)"),
-				emptyStateText: t("No scripts found in your vault"),
+				renderItem: (path, el, matches) => renderNotePathSuggestion(el, path, this.app, {
+					matches,
+					pathOffset: titles[paths.indexOf(path)].primary.length + 1,
+				}),
+				searchItems: paths.map((path, index) => `${titles[index].primary} ${path}`),
+				allowCustomValue: false,
 			}
 		);
 
-		if (!selectedPath) return null;
-
-		const candidate = this.scriptCandidates.find(
-			(c) => c.file.path === selectedPath
-		);
-		if (!candidate) return null;
+		const index = paths.indexOf(selectedPath);
+		if (index === -1) return null;
+		const candidate = this.scriptCandidates[index];
 
 		if (candidate.isMarkdown) {
 			const reason = await noteScriptError(this.app, candidate.file);
@@ -637,11 +552,11 @@ export class CommandSequenceEditor {
 			}
 		}
 
-		return candidate;
+		return new UserScript(labels[index], candidate.file.path);
 	}
 
 	private addCommand(command: ICommand) {
-		// Immutable add: callers (MacroBuilder, ConditionalBranchEditorModal) track
+		// Immutable add: callers (MacroBuilder, ConditionalBranchEditorPage) track
 		// changes via onCommandsChange, not in-place mutation of the passed array.
 		this.commandsRef = [...this.commandsRef, command];
 		this.emitCommandsChanged();

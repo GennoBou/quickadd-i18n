@@ -1,7 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-
-// FormatPreviewField -> formatter graph pulls obsidian-dataview's CJS require.
-vi.mock("obsidian-dataview", () => ({ getAPI: vi.fn() }));
+// @vitest-environment jsdom
+import { describe, expect, it } from "vitest";
 
 import { App } from "obsidian";
 import { fireEvent, render } from "@testing-library/svelte";
@@ -14,6 +12,20 @@ import Toggle from "../components/Toggle.svelte";
 import { createCaptureChoiceFormProps } from "./captureChoiceFormProps.svelte";
 import { createTemplateChoiceFormProps } from "./templateChoiceFormProps.svelte";
 import { TemplateChoiceBuilder } from "./templateChoiceBuilder";
+import { CaptureChoiceBuilder } from "./captureChoiceBuilder";
+import type IChoice from "../../types/choices/IChoice";
+
+/** Open the builder page and leave it untouched; returns what it saved. */
+function openAndLeave(choice: ITemplateChoice): ITemplateChoice {
+	let saved: IChoice | undefined;
+	const builder = new TemplateChoiceBuilder(new App(), choice, plugin, (edited) => {
+		saved = edited;
+	});
+	builder.display();
+	builder.hide();
+	if (!saved) throw new Error("The builder saved nothing");
+	return saved as ITemplateChoice;
+}
 
 // Regression tests for #1497: choices saved before an optional boolean field
 // existed persist WITHOUT that field. Svelte 5 hard-throws (props_invalid_value)
@@ -169,31 +181,23 @@ describe("choice edit forms tolerate legacy choices missing newer fields (#1497)
 
 	it("TemplateChoiceBuilder backfills chooseFromSubfolders so close persists a full shape", async () => {
 		// The real edit path: builder normalizeChoice runs before the form mounts,
-		// and the choice resolved at close carries the backfilled field even when
+		// and the choice saved on leaving carries the backfilled field even when
 		// the user never touches the subfolders toggle.
-		const builder = new TemplateChoiceBuilder(
-			new App(),
-			legacyTemplateChoice(),
-			plugin,
-		);
-		builder.close();
-		const resolved = (await builder.waitForClose) as ITemplateChoice;
+		const resolved = openAndLeave(legacyTemplateChoice());
 		expect(resolved.folder.chooseFromSubfolders).toBe(false);
 	});
 
 	it("TemplateChoiceBuilder backfills a bare hand-edited choice (no folder/fileNameFormat at all)", async () => {
 		// A minimal, hand-edited/imported Template choice: only identity fields.
 		// Before the per-field backfills, normalizeChoice threw on
-		// `folder.chooseFromSubfolders` and the modal mounted blank.
+		// `folder.chooseFromSubfolders` and the builder mounted blank.
 		const bare = {
 			id: "t2",
 			name: "Bare Template",
 			type: "Template",
 			command: false,
 		} as unknown as ITemplateChoice;
-		const builder = new TemplateChoiceBuilder(new App(), bare, plugin);
-		builder.close();
-		const resolved = (await builder.waitForClose) as ITemplateChoice;
+		const resolved = openAndLeave(bare);
 		expect(resolved.templatePath).toBe("");
 		expect(resolved.fileNameFormat).toEqual({ enabled: false, format: "" });
 		expect(resolved.folder).toEqual({
@@ -218,13 +222,33 @@ describe("choice edit forms tolerate legacy choices missing newer fields (#1497)
 			folder: { enabled: true },
 			fileNameFormat: { enabled: true },
 		} as unknown as ITemplateChoice;
-		const builder = new TemplateChoiceBuilder(new App(), partial, plugin);
-		builder.close();
-		const resolved = (await builder.waitForClose) as ITemplateChoice;
+		const resolved = openAndLeave(partial);
 		expect(resolved.folder.enabled).toBe(true);
 		expect(resolved.folder.folders).toEqual([]);
 		expect(resolved.folder.chooseFromSubfolders).toBe(false);
 		expect(resolved.fileNameFormat).toEqual({ enabled: true, format: "" });
+	});
+
+	it("CaptureChoiceBuilder shows and saves Keep order for a property Capture saved before Sort list existed", () => {
+		const choice = legacyCaptureChoice();
+		choice.propertyCapture = {
+			property: { kind: "named", format: "complete_instances" },
+			action: "addToList",
+			createIfMissing: true,
+		} as ICaptureChoice["propertyCapture"];
+		let saved: IChoice | undefined;
+		const builder = new CaptureChoiceBuilder(new App(), choice, plugin, (edited) => {
+			saved = edited;
+		});
+		builder.display();
+		const items = Array.from(builder.containerEl.querySelectorAll(".setting-item"));
+		const item = (name: string) => items.find((el) => el.querySelector(".setting-item-name")?.textContent === name);
+		expect(item("Sort list")?.querySelector("select")?.value).toBe("none");
+		expect(item("Action")?.querySelector(".setting-item-description")?.textContent).toBe(
+			"Each line is one item. New items go below the existing ones. Put {{PROPERTY}} on its own line to choose where the existing items go.",
+		);
+		builder.hide();
+		expect((saved as ICaptureChoice | undefined)?.propertyCapture?.sort).toBe("none");
 	});
 
 	it("Toggle accepts an undefined binding and writes a boolean on flip", async () => {

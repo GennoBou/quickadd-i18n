@@ -1,5 +1,5 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Modal } from "obsidian";
 import type QuickAdd from "../../main";
 import { setQuickAddInstance } from "../../quickAddInstance";
 import GenericInputPrompt from "./GenericInputPrompt";
@@ -8,43 +8,8 @@ import { PromptPeekSession } from "../promptPeek/PromptPeekSession";
 import { clearVisiblePrompts } from "../promptPeek/visiblePrompts";
 import { UserCancelError } from "../../errors/UserCancelError";
 
-const modalProto = Modal.prototype as unknown as {
-	onOpen?: unknown;
-	onClose?: unknown;
-};
-if (typeof modalProto.onOpen !== "function") modalProto.onOpen = () => {};
-if (typeof modalProto.onClose !== "function") modalProto.onClose = () => {};
-
-function makeFakeApp(selection = "") {
-	return {
-		dom: { appContainerEl: document.body },
-		keymap: { pushScope: () => {}, popScope: () => {} },
-		workspace: {
-			containerEl: document.body,
-			on: () => ({}),
-			getActiveFile: () => null,
-			getActiveViewOfType: () =>
-				selection
-					? { editor: { getSelection: () => selection } }
-					: undefined,
-		},
-		metadataCache: {
-			on: () => ({}),
-			getTags: () => ({}),
-			getFileCache: () => undefined,
-			isUserIgnored: () => false,
-			unresolvedLinks: {},
-		},
-		vault: {
-			on: () => ({}),
-			getMarkdownFiles: () => [],
-			getAllLoadedFiles: () => [],
-			getFiles: () => [],
-			getAbstractFileByPath: () => null,
-		},
-		fileManager: { getNewFileParent: () => ({ path: "" }) },
-	};
-}
+import { makeFakeApp } from "../../../tests/helpers/prompts/app";
+import "../../../tests/helpers/prompts/dom";
 
 describe("GenericInputPrompt peek", () => {
 	let fakeApp: ReturnType<typeof makeFakeApp>;
@@ -185,6 +150,38 @@ describe("GenericInputPrompt peek", () => {
 		input.dispatchEvent(new Event("input", { bubbles: true }));
 		input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
 		await expect(waitForClose).resolves.toBe("done");
+	});
+
+	it("offers no peek over another plugin's modal", async () => {
+		document.body.createDiv({ cls: "modal-container" });
+
+		const waitForClose = GenericInputPrompt.Prompt(
+			fakeApp as never,
+			"Name",
+			undefined,
+			undefined,
+			undefined,
+			{ allowPeek: true },
+		);
+		(document.querySelector(".qa-peek-button") as HTMLButtonElement).click();
+		expect(PromptPeekSession.isPeeking()).toBe(false);
+
+		const input = document.querySelector(
+			".qaInputPrompt input",
+		) as HTMLInputElement;
+		input.dispatchEvent(
+			new KeyboardEvent("keydown", {
+				key: "E",
+				shiftKey: true,
+				ctrlKey: true,
+			}),
+		);
+		expect(PromptPeekSession.isPeeking()).toBe(false);
+
+		input.value = "Ada";
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+		input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+		await expect(waitForClose).resolves.toBe("Ada");
 	});
 
 	it("keeps Ok ahead of Peek in the tab order", async () => {
