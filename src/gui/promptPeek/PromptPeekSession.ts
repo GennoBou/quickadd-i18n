@@ -16,7 +16,7 @@ import {
 import { previewSelection } from "./peekText";
 import { hasVisiblePrompt } from "./visiblePrompts";
 
-export type PromptPeekHandle = {
+type PromptPeekHandle = {
 	title: string;
 	resume: () => void;
 	cancel: () => void;
@@ -132,7 +132,7 @@ export class PromptPeekSession {
 		}
 
 		const header = chip.createDiv({ cls: "qa-peek-chip-header" });
-		const icon = header.createEl("span", { cls: "qa-peek-chip-icon" });
+		const icon = header.createSpan({ cls: "qa-peek-chip-icon" });
 		icon.setAttribute("aria-hidden", "true");
 		setIcon(icon, "eye");
 		const titles = header.createDiv({ cls: "qa-peek-chip-titles" });

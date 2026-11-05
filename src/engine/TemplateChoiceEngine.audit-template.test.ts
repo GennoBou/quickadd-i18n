@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { createChoiceExecutor } from "../../tests/helpers/createChoiceExecutor";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -53,6 +54,9 @@ vi.mock("../formatters/completeFormatter", () => {
 		async formatFileName(format: string, prompt: string) {
 			return formatFileNameMock(format, prompt);
 		}
+		async formatTemplateContent(input: string) {
+			return await this.formatFileContent(input);
+		}
 		async formatFileContent(...args: unknown[]) {
 			return await formatFileContentMock(...args);
 		}
@@ -73,8 +77,8 @@ vi.mock("../formatters/completeFormatter", () => {
 	return { CompleteFormatter: CompleteFormatterMock };
 });
 
-const { insertFileLinkToActiveViewMock } = vi.hoisted(() => ({
-	insertFileLinkToActiveViewMock: vi.fn(),
+const { insertFileLinkToCurrentNoteMock } = vi.hoisted(() => ({
+	insertFileLinkToCurrentNoteMock: vi.fn(),
 }));
 
 vi.mock("../utils/fileLinks", () => ({
@@ -83,14 +87,20 @@ vi.mock("../utils/fileLinks", () => ({
 	getAppendLinkDestinationFile: vi.fn(() => null),
 }));
 
-vi.mock("../utilityObsidian", () => ({
+vi.mock("../utils/templaterIntegration", () => ({
 	getTemplater: vi.fn(() => ({})),
 	overwriteTemplaterOnce: vi.fn(),
+	jumpToNextTemplaterCursorIfPossible: vi.fn(),
+}));
+vi.mock("../utils/vaultQueries", () => ({
 	getAllFolderPathsInVault: vi.fn(() => []),
-	insertFileLinkToActiveView: insertFileLinkToActiveViewMock,
+}));
+vi.mock("../utils/editorInsertion", () => ({
+	insertFileLinkToCurrentNote: insertFileLinkToCurrentNoteMock,
+}));
+vi.mock("../utils/fileOpening", () => ({
 	openExistingFileTab: vi.fn(() => null),
 	openFile: vi.fn(),
-	jumpToNextTemplaterCursorIfPossible: vi.fn(),
 }));
 
 vi.mock("../gui/GenericSuggester/genericSuggester", () => ({
@@ -99,10 +109,6 @@ vi.mock("../gui/GenericSuggester/genericSuggester", () => ({
 
 vi.mock("../main", () => ({
 	default: class QuickAddMock {},
-}));
-
-vi.mock("obsidian-dataview", () => ({
-	getAPI: vi.fn(),
 }));
 
 import { Notice, TFile, type App } from "obsidian";
@@ -206,7 +212,7 @@ beforeEach(() => {
 	formatFileNameMock.mockReset();
 	formatFileContentMock.mockReset();
 	formatFileContentMock.mockResolvedValue("");
-	insertFileLinkToActiveViewMock.mockReset();
+	insertFileLinkToCurrentNoteMock.mockReset();
 });
 
 describe("TemplateChoiceEngine post-commit link failure (audit)", () => {
@@ -226,7 +232,7 @@ describe("TemplateChoiceEngine post-commit link failure (audit)", () => {
 				createFileWithTemplate: () => Promise<TFile | null>;
 			}
 		).createFileWithTemplate = vi.fn().mockResolvedValue(createdFile);
-		insertFileLinkToActiveViewMock.mockRejectedValueOnce(
+		insertFileLinkToCurrentNoteMock.mockRejectedValueOnce(
 			new Error("Cannot append link because no active Markdown view is available."),
 		);
 		const logErrorSpy = vi.spyOn(log, "logError").mockImplementation(() => "");

@@ -1,6 +1,6 @@
-export type YamlRange = [number, number] | null;
+type YamlRange = [number, number] | null;
 
-export interface YamlMatchContext {
+interface YamlMatchContext {
   isInYaml: boolean;
   isQuoted: boolean;
   lineStart: number;
@@ -34,7 +34,7 @@ export function getYamlContextForMatch(
   yamlRange: YamlRange,
 ): YamlMatchContext {
   const [yamlStart, yamlEnd] = yamlRange ?? [Number.NaN, Number.NaN];
-  const isInYaml = yamlRange !== null && matchStart >= yamlStart && matchStart <= yamlEnd;
+  const isInYaml = yamlRange !== null && matchStart >= yamlStart && matchStart < yamlEnd;
   if (!isInYaml) {
     return {
       isInYaml: false,

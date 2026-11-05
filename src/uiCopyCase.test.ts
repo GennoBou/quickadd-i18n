@@ -1,17 +1,9 @@
+// @vitest-environment jsdom
 import { readFileSync, readdirSync } from "node:fs";
 import { extname, join, relative, resolve } from "node:path";
-import { App } from "obsidian";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-// The settings tab transitively imports the real obsidian-dataview, which cannot
-// resolve `obsidian` outside the app (same stub as every other tab test).
-vi.mock("obsidian-dataview", () => ({ getAPI: vi.fn() }));
-
-import { QuickAddSettingsTab } from "./quickAddSettingsTab";
-import { DEFAULT_SETTINGS } from "./settings";
-import { settingsStore } from "./settingsStore";
-import { deepClone } from "./utils/deepClone";
-import type QuickAdd from "./main";
+import { createSettingDefinitions } from "./gui/components/settingsDefinitions";
 
 /**
  * Copy-style regression guard for #1553.
@@ -93,38 +85,25 @@ export function titleCaseWords(text: string): string[] {
 }
 
 describe("settings tab copy", () => {
-	beforeEach(() => {
-		settingsStore.replaceState(deepClone(DEFAULT_SETTINGS));
-	});
-
-	/**
-	 * Every heading and label the tab declares, including the Developer group.
-	 * `getSettingDefinitions()` gates that group behind `__IS_DEV_BUILD__`, which
-	 * vitest pins to false, so reaching for the builder directly is what keeps
-	 * its strings covered rather than silently exempt.
-	 */
 	function definitionStrings(): { headings: string[]; names: string[]; descs: string[] } {
-		const app = new App();
-		const tab = new QuickAddSettingsTab(app, { app } as unknown as QuickAdd);
-		type Group = {
-			heading?: string;
-			items?: Array<{ name?: string; desc?: string | DocumentFragment }>;
-		};
-		const groups = [
-			...(tab.getSettingDefinitions() as unknown as Group[]),
-			(tab as unknown as { developerGroup(): Group }).developerGroup(),
-		];
+		const groups = createSettingDefinitions({
+			choices: vi.fn(),
+			packages: vi.fn(),
+			dateAliases: vi.fn(),
+			globalVariables: vi.fn(),
+			developmentInfo: vi.fn(),
+		}, true);
 
+		// Pages (Advanced) hold their own groups; check their copy too.
+		type Node = { heading?: string; name?: string; desc?: unknown; items?: Node[] };
+		const all: Node[] = [];
+		const walk = (nodes: Node[]) => nodes.forEach((node) => { all.push(node); walk(node.items ?? []); });
+		walk(groups as Node[]);
+		const items = all.filter((node) => node.name);
 		return {
-			headings: groups.flatMap((g) => (g.heading ? [g.heading] : [])),
-			names: groups.flatMap((g) =>
-				(g.items ?? []).flatMap((i) => (i.name ? [i.name] : [])),
-			),
-			descs: groups.flatMap((g) =>
-				(g.items ?? []).flatMap((i) =>
-					typeof i.desc === "string" ? [i.desc] : [],
-				),
-			),
+			headings: all.flatMap((node) => node.heading ? [node.heading] : []),
+			names: items.map((item) => item.name as string),
+			descs: items.flatMap((item) => typeof item.desc === "string" ? [item.desc] : []),
 		};
 	}
 

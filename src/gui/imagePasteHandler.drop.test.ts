@@ -1,4 +1,13 @@
-import type { App, TFile } from "obsidian";
+// @vitest-environment jsdom
+import {
+	makeApp,
+	makeFile,
+	makeInput,
+	makeTextarea,
+	flushSaves,
+	deferCreate,
+} from "../../tests/helpers/prompts/images";
+import type { TFile } from "obsidian";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	attachImagePasteHandler,
@@ -16,48 +25,6 @@ vi.mock("../logger/logManager", () => ({
 import { log } from "../logger/logManager";
 import { Notice } from "obsidian";
 import { settingsStore } from "../settingsStore";
-
-function makeApp(vaultFiles: TFile[] = []) {
-	const created: string[] = [];
-	const createBinary = vi.fn(async (path: string, _data: ArrayBuffer) => {
-		created.push(path);
-		return { path } as TFile;
-	});
-	const getAvailablePathForAttachment = vi.fn(
-		async (filename: string, _sourcePath?: string) => {
-			let candidate = `attachments/${filename}`;
-			let counter = 1;
-			while (created.includes(candidate)) {
-				candidate = `attachments/${filename.replace(/(\.\w+)$/, ` ${counter}$1`)}`;
-				counter++;
-			}
-			return candidate;
-		},
-	);
-	const generateMarkdownLink = vi.fn(
-		(file: TFile, _sourcePath: string) => `![[${file.path}]]`,
-	);
-	const filesByPath = new Map(vaultFiles.map((file) => [file.path, file]));
-	const getAbstractFileByPath = vi.fn(
-		(path: string) => filesByPath.get(path) ?? null,
-	);
-	const app = {
-		vault: { createBinary, getAbstractFileByPath },
-		fileManager: { getAvailablePathForAttachment, generateMarkdownLink },
-	} as unknown as App;
-
-	return {
-		app,
-		createBinary,
-		created,
-		getAbstractFileByPath,
-		getAvailablePathForAttachment,
-	};
-}
-
-function makeFile(name: string, type: string): File {
-	return new File([new Uint8Array([1, 2, 3])], name, { type });
-}
 
 function makeDropData(
 	files: File[],
@@ -85,23 +52,6 @@ function dispatchDrag(
 	Object.defineProperty(event, "dataTransfer", { value: data });
 	el.dispatchEvent(event);
 	return event as DragEvent;
-}
-
-async function flushSaves(handle: { whenIdle(): Promise<void> }) {
-	await handle.whenIdle();
-	await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-function makeInput(): HTMLInputElement {
-	const input = document.createElement("input");
-	document.body.appendChild(input);
-	return input;
-}
-
-function makeTextarea(): HTMLTextAreaElement {
-	const textarea = document.createElement("textarea");
-	document.body.appendChild(textarea);
-	return textarea;
 }
 
 beforeEach(() => {
@@ -132,6 +82,42 @@ describe("attachImagePasteHandler image drop", () => {
 		expect(input.value).toBe("![[attachments/sunset.png]]");
 		expect(input.value).not.toContain("Clipboard image");
 	});
+
+	it.each([
+		["holiday.jpeg", "image/jpeg", "holiday.jpg"],
+		["portrait.jpeg", "image/png", "portrait.png"],
+		["photos/summer.png", "image/png", "summer.png"],
+		["C:\\Users\\me\\winter.png", "image/png", "winter.png"],
+	])("names dropped %s (%s) %s", async (name, mimeType, expected) => {
+		const { app, getAvailablePathForAttachment } = makeApp();
+		const input = makeInput();
+		const handle = attachImagePasteHandler(app, input, {});
+
+		dispatchDrag(input, "drop", makeDropData([makeFile(name, mimeType)]));
+		await flushSaves(handle);
+
+		expect(getAvailablePathForAttachment).toHaveBeenCalledWith(
+			expected,
+			undefined,
+		);
+	});
+
+	it.each(["CON.png", "bad:name.png", ".hidden.png", "photo..png"])(
+		"falls back to the clipboard timestamp name for dropped %s",
+		async (name) => {
+			const { app, getAvailablePathForAttachment } = makeApp();
+			const input = makeInput();
+			const handle = attachImagePasteHandler(app, input, {});
+
+			dispatchDrag(input, "drop", makeDropData([makeFile(name, "image/png")]));
+			await flushSaves(handle);
+
+			expect(getAvailablePathForAttachment).toHaveBeenCalledWith(
+				expect.stringMatching(/^Clipboard image \d{4}-\d{2}-\d{2} \d{2}\.\d{2}\.\d{2}\.png$/),
+				undefined,
+			);
+		},
+	);
 
 	it("keeps the dropped filename when destination-title naming is on", async () => {
 		settingsStore.setState({ namePastedImagesAfterNoteTitle: true });
@@ -354,13 +340,7 @@ describe("attachImagePasteHandler image drop", () => {
 
 	it("notices instead of interleaving a second drop during a save", async () => {
 		const { app, createBinary } = makeApp();
-		let resolveCreate: () => void = () => {};
-		createBinary.mockImplementationOnce(
-			(path: string) =>
-				new Promise<TFile>((resolve) => {
-					resolveCreate = () => resolve({ path } as TFile);
-				}),
-		);
+		const resolveCreate = deferCreate(createBinary);
 		const input = makeInput();
 		const handle = attachImagePasteHandler(app, input, {});
 
@@ -389,13 +369,7 @@ describe("attachImagePasteHandler image drop", () => {
 
 	it("skips insertion when detached during a dropped-image save", async () => {
 		const { app, createBinary } = makeApp();
-		let resolveCreate: () => void = () => {};
-		createBinary.mockImplementationOnce(
-			(path: string) =>
-				new Promise<TFile>((resolve) => {
-					resolveCreate = () => resolve({ path } as TFile);
-				}),
-		);
+		const resolveCreate = deferCreate(createBinary);
 		const input = makeInput();
 		const handle = attachImagePasteHandler(app, input, {});
 

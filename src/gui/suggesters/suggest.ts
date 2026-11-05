@@ -1,14 +1,130 @@
-import type { Instance as PopperInstance } from "@popperjs/core";
-import { createPopper } from "@popperjs/core";
 import type { App, ISuggestOwner } from "obsidian";
-import { debounce, Scope } from "obsidian";
+import { debounce, Scope, type Debouncer } from "obsidian";
 import { log } from "src/logger/logManager";
-import { getOwnerDocument, getOwnerWindow } from "src/utils/activeWindow";
+import { createOwnedElement, getOwnerDocument, getOwnerWindow } from "src/utils/activeWindow";
 import { renderExactHighlight } from "./utils";
 
 const wrapAround = (value: number, size: number): number => {
 	return ((value % size) + size) % size;
 };
+
+// Gap between the input and the list.
+const LIST_GAP_PX = 4;
+// The narrowest the list gets beside a narrow input, such as the Macro builder's
+// script field on a phone, so a name wraps between words, not between letters.
+const MIN_LIST_WIDTH_PX = 300;
+
+// In a prompt, the list stays below its input while this much room is left
+// there, about three of the note picker's two-line rows. Above the input it
+// would cover the form's title and the answers already given.
+const MIN_PROMPT_ROOM_BELOW_PX = 150;
+
+/**
+ * Where the room below the input ends in a prompt: a gap above its action bar
+ * (`.qa-prompt-actions`: Submit, Cancel, Peek) when the bar is below the input.
+ * QuickAdd prompts end in that bar (pinned to the bottom of the one-page
+ * form), and the list is layered above the modal, so a list that reaches the
+ * bar takes the click aimed at Submit.
+ */
+function actionBarLimit(inputEl: HTMLElement, input: DOMRect): number {
+	const actions = inputEl.closest(".modal")?.querySelector(".qa-prompt-actions")?.getBoundingClientRect();
+	return actions && actions.height > 0 && actions.top >= input.bottom
+		? actions.top - LIST_GAP_PX
+		: Infinity;
+}
+
+/**
+ * Place the list against its input, exactly as wide as the input (also past
+ * the 500px cap Obsidian puts on `.suggestion-container`; the text prompt's
+ * input is wider), but at least `MIN_LIST_WIDTH_PX` or the viewport's width.
+ * It opens below the input, and on the roomier side when it doesn't fit there,
+ * shortened if needed. In a prompt it stays below, shortened, while
+ * `MIN_PROMPT_ROOM_BELOW_PX` of room is left. The room below ends at the bottom
+ * of the visible viewport, the on-screen keyboard on a phone, or
+ * `actionBarLimit`. Horizontally it stays inside the viewport.
+ */
+function placeList(inputEl: HTMLElement, listEl: HTMLElement): void {
+	const input = inputEl.getBoundingClientRect();
+	const doc = inputEl.ownerDocument;
+	const viewport = doc.defaultView?.visualViewport ?? {
+		offsetLeft: 0,
+		offsetTop: 0,
+		width: doc.documentElement.clientWidth,
+		height: doc.documentElement.clientHeight,
+	};
+	const width = Math.max(input.width, Math.min(MIN_LIST_WIDTH_PX, viewport.width));
+	// Measured at 0,0, the list's rect is its containing block's origin, so the
+	// viewport positions below hold whatever element it is positioned against.
+	listEl.setCssStyles({ maxHeight: "", width: `${width}px`, left: "0px", top: "0px" });
+	const origin = listEl.getBoundingClientRect();
+
+	// On a phone the on-screen keyboard covers the bottom of the screen without
+	// always shrinking the visual viewport (Android leaves it full height).
+	// Obsidian lays its own UI out above `100vh - var(--keyboard-height)`.
+	const keyboardHeight =
+		parseFloat(getComputedStyle(doc.documentElement).getPropertyValue("--keyboard-height")) || 0;
+	const barLimit = actionBarLimit(inputEl, input);
+	const visibleBottom = Math.min(
+		viewport.offsetTop + viewport.height,
+		doc.documentElement.clientHeight - keyboardHeight,
+		barLimit,
+	);
+	// The top of a phone's screen is the status bar. On a phone, a settings page
+	// scrolls under the settings header, which holds the back and close buttons.
+	const safeAreaTop =
+		parseFloat(getComputedStyle(doc.body).getPropertyValue("--safe-area-inset-top")) || 0;
+	const settingsHeader = inputEl.closest(".modal.mod-settings")?.querySelector(".modal-header");
+	const visibleTop = Math.max(
+		viewport.offsetTop + safeAreaTop,
+		settingsHeader?.getBoundingClientRect().bottom ?? 0,
+	);
+
+	const roomBelow = visibleBottom - input.bottom - LIST_GAP_PX;
+	const roomAbove = input.top - LIST_GAP_PX - visibleTop;
+	const enoughBelow = Math.min(
+		origin.height,
+		barLimit < Infinity ? MIN_PROMPT_ROOM_BELOW_PX : Infinity,
+	);
+	const placeAbove = roomBelow < enoughBelow && roomAbove > roomBelow;
+	const height = Math.min(origin.height, placeAbove ? roomAbove : roomBelow);
+	const top = placeAbove ? input.top - LIST_GAP_PX - height : input.bottom + LIST_GAP_PX;
+	const left = Math.max(
+		viewport.offsetLeft,
+		Math.min(input.left, viewport.offsetLeft + viewport.width - width),
+	);
+	listEl.setCssStyles({
+		maxHeight: height < origin.height ? `${height}px` : "",
+		left: `${left - origin.left}px`,
+		top: `${top - origin.top}px`,
+	});
+}
+
+/**
+ * Let a path in a plain row wrap after its slashes rather than mid-name. `/` is
+ * not a line-break opportunity, so without this a long path either runs past
+ * the list's edge or (with `overflow-wrap: anywhere`) breaks at whatever letter
+ * reaches it. `<wbr>` leaves the row's text unchanged. Only text directly in
+ * the row or its highlight marks is touched: structured rows (a name and a
+ * path in their own spans) keep their own wrapping, such as an ellipsized
+ * path, which Chromium would let `<wbr>` break.
+ */
+function allowBreaksAfterSlashes(row: HTMLElement): void {
+	const texts = Array.from(row.childNodes)
+		.flatMap((node) => (node.nodeName === "MARK" ? Array.from(node.childNodes) : [node]))
+		.filter((node): node is Text =>
+			node.nodeType === Node.TEXT_NODE && Boolean(node.nodeValue?.includes("/")),
+		);
+	for (const text of texts) {
+		// Each slash ends a part. No lookbehind: iOS before 16.4 can't parse one,
+		// and a regex it can't parse stops QuickAdd from loading at all.
+		const parts = (text.nodeValue ?? "").match(/[^/]*\/|[^/]+$/g) ?? [];
+		text.replaceWith(
+			...parts.flatMap((part) =>
+				part.endsWith("/") ? [part, createOwnedElement(row, "wbr")] : [part],
+			),
+		);
+	}
+}
 
 let textInputSuggestSeq = 0;
 
@@ -52,45 +168,20 @@ class Suggest<T> {
 		containerEl.addEventListener("click", this.clickListener);
 		containerEl.addEventListener("mousemove", this.mousemoveListener);
 
-		// Enhanced keyboard navigation
-		scope.register([], "ArrowUp", (event) => {
-			if (!event.isComposing && this.isOpen) {
-				this.setSelectedItem(this.selectedItem - 1, true);
-				return false;
-			}
-		});
-
-		scope.register([], "ArrowDown", (event) => {
-			if (!event.isComposing && this.isOpen) {
-				this.setSelectedItem(this.selectedItem + 1, true);
-				return false;
-			}
-		});
-
-		scope.register([], "Enter", (event) => {
-			if (!event.isComposing && this.isOpen) {
-				this.useSelectedItem(event);
-				return false;
-			}
-		});
-
-		// Additional keyboard shortcuts
-		scope.register([], "PageUp", (event) => {
-			if (!event.isComposing && this.isOpen) {
-				this.setSelectedItem(Math.max(0, this.selectedItem - 5), true);
-				return false;
-			}
-		});
-
-		scope.register([], "PageDown", (event) => {
-			if (!event.isComposing && this.isOpen) {
-				this.setSelectedItem(
-					Math.min(this.suggestions.length - 1, this.selectedItem + 5),
-					true,
-				);
-				return false;
-			}
-		});
+		const navigation: Record<string, () => number> = {
+			ArrowUp: () => this.selectedItem - 1,
+			ArrowDown: () => this.selectedItem + 1,
+			PageUp: () => Math.max(0, this.selectedItem - 5),
+			PageDown: () => Math.min(this.suggestions.length - 1, this.selectedItem + 5),
+		};
+		for (const [key, nextIndex] of Object.entries(navigation)) {
+			scope.register([], key, (event) => {
+				if (!event.isComposing && this.isOpen) {
+					this.setSelectedItem(nextIndex(), true);
+					return false;
+				}
+			});
+		}
 	}
 
 	private findSuggestionItem(target: EventTarget | null): HTMLDivElement | null {
@@ -120,14 +211,13 @@ class Suggest<T> {
 		const suggestionEls: HTMLDivElement[] = [];
 
 		values.forEach((value, index) => {
-			const suggestionEl = this.containerEl.ownerDocument.createElement("div");
-			suggestionEl.classList.add("suggestion-item");
-			this.containerEl.appendChild(suggestionEl);
+			const suggestionEl = this.containerEl.createDiv({ cls: "suggestion-item" });
 			suggestionEl.setAttribute("role", "option");
 			suggestionEl.setAttribute("aria-selected", "false");
 			suggestionEl.setAttribute("id", `${this.optionIdPrefix}-option-${index}`);
 
 			this.owner.renderSuggestion(value, suggestionEl);
+			allowBreaksAfterSlashes(suggestionEl);
 			suggestionEls.push(suggestionEl);
 		});
 
@@ -205,7 +295,6 @@ export abstract class TextInputSuggest<T> implements ISuggestOwner<T> {
 	protected app: App;
 	protected inputEl: HTMLInputElement | HTMLTextAreaElement;
 
-	private popper: PopperInstance | null = null;
 	private scope: Scope;
 	private suggestEl: HTMLElement;
 	private suggest: Suggest<T>;
@@ -213,18 +302,21 @@ export abstract class TextInputSuggest<T> implements ISuggestOwner<T> {
 	private currentRequestId = 0;
 	private isOpen = false;
 	private destroyed = false;
-	private noResultsTimeout: number | null = null;
 	private currentQuery = "";
+	// The input text the shown list was built for.
+	private listQuery: string | null = null;
 
 	// Global listeners for close-on-anything-else
 	private globalClickListener: (event: MouseEvent) => void;
 	private globalWheelListener: (event: WheelEvent) => void;
+	private globalScrollListener: (event: Event) => void;
 	private globalResizeListener: () => void;
+	private globalKeyboardListener: () => void;
 	private globalBlurListener: () => void;
 	private inputBlurListener: () => void;
 
 	// Debounced input handler and bound event listeners
-	private debouncedOnInputChanged: (event?: Event) => void;
+	private debouncedOnInputChanged: Debouncer<[event?: Event], Promise<void>>;
 	private inputEventListener: (event: Event) => void;
 	private focusEventListener: () => void;
 
@@ -259,11 +351,9 @@ export abstract class TextInputSuggest<T> implements ISuggestOwner<T> {
 		this.inputEl = inputEl;
 		this.scope = new Scope(parentScope);
 
-		this.suggestEl = this.inputEl.ownerDocument.createElement("div");
-		this.suggestEl.classList.add("suggestion-container");
-		const suggestion = this.inputEl.ownerDocument.createElement("div");
-		suggestion.classList.add("suggestion");
-		this.suggestEl.appendChild(suggestion);
+		this.suggestEl = this.inputEl.ownerDocument.win.createDiv();
+		this.suggestEl.classList.add("suggestion-container", "qa-text-input-suggest");
+		const suggestion = this.suggestEl.createDiv({ cls: "suggestion" });
 
 		this.listboxId = `qa-suggest-listbox-${++textInputSuggestSeq}`;
 		suggestion.id = this.listboxId;
@@ -279,6 +369,11 @@ export abstract class TextInputSuggest<T> implements ISuggestOwner<T> {
 		);
 
 		this.scope.register([], "Escape", this.close.bind(this));
+		this.scope.register([], "Enter", (event) => {
+			if (event.isComposing || !this.suggest.getIsOpen()) return;
+			void this.useSelectedItem(event);
+			return false;
+		});
 
 		// Shorter debounce for snappier UX
 		this.debouncedOnInputChanged = debounce(this.onInputChanged.bind(this), 50);
@@ -305,7 +400,15 @@ export abstract class TextInputSuggest<T> implements ISuggestOwner<T> {
 		// Setup global listeners
 		this.globalClickListener = this.onGlobalClick.bind(this);
 		this.globalWheelListener = this.onGlobalWheel.bind(this);
+		// Keep the list on its input when a scroll moves the input (a scrolled
+		// form); scrolling the list itself moves nothing.
+		this.globalScrollListener = (event: Event) => {
+			if (!this.suggestEl.contains(event.target as Node)) this.reposition();
+		};
 		this.globalResizeListener = this.close.bind(this);
+		// A list opened as its field took focus was placed before the keyboard
+		// came up; the keyboard does not always resize or scroll anything.
+		this.globalKeyboardListener = this.reposition.bind(this);
 		this.globalBlurListener = this.close.bind(this);
 	}
 
@@ -327,88 +430,64 @@ export abstract class TextInputSuggest<T> implements ISuggestOwner<T> {
 		}
 	}
 
-	async onInputChanged(event?: Event): Promise<void> {
+	async onInputChanged(event?: CompletionInputEvent): Promise<void> {
 		// A pending debounced call can fire after destroy() removed the input
 		// listeners; bail so a destroyed instance never re-opens.
 		if (this.destroyed || this.inputEl.closest("[hidden]")) return;
-		const completionEvent = event as CompletionInputEvent | undefined;
-		// Handle multi-select mode: keep suggestions open after selection
-		if (completionEvent?.fromCompletion && completionEvent.keepOpen) {
-			const inputStr = this.inputEl.value;
-			const requestId = ++this.currentRequestId;
-			this.currentQuery = inputStr;
-
-			try {
-				const suggestions = await this.getSuggestions(inputStr);
-				if (requestId === this.currentRequestId) {
-					if (suggestions?.length) {
-						this.suggest.setSuggestions(suggestions);
-						// Already open, just update suggestions
-						if (!this.isOpen) {
-							this.open(this.app.dom.appContainerEl, this.inputEl);
-						}
-					} else {
-						// No more items available to select, close the dropdown
-						this.close();
-					}
-				}
-			} catch (error) {
-				log.logError(error as Error);
-			}
-			return;
-		}
-
-		// Ignore programmatic changes from completion selection
-		if (completionEvent?.fromCompletion) {
-			return;
-		}
+		// The handler is debounced, so focus may have moved on since the focus or
+		// input event fired; a popup must never open under an unfocused input.
+		if (this.inputEl.ownerDocument.activeElement !== this.inputEl) return;
+		const keepOpen = Boolean(event?.fromCompletion && event.keepOpen);
+		if (event?.fromCompletion && !keepOpen) return;
 
 		const inputStr = this.inputEl.value;
 		const requestId = ++this.currentRequestId;
-
-		// Store current query for highlighting
 		this.currentQuery = inputStr;
-
 		try {
 			const suggestions = await this.getSuggestions(inputStr);
-
-			// Check if this is still the latest request
-			if (requestId !== this.currentRequestId) {
-				return; // Stale request, ignore
-			}
-
-			if (!suggestions || suggestions.length === 0) {
-				// Show "No matches" briefly before closing
-				if (this.isOpen) {
-					this.showNoResultsAndClose();
-				}
+			if (requestId !== this.currentRequestId) return;
+			if (!suggestions?.length) {
+				if (keepOpen || this.isOpen) this.close();
 				return;
 			}
-
 			this.suggest.setSuggestions(suggestions);
-			this.open(this.app.dom.appContainerEl, this.inputEl);
+			this.listQuery = inputStr;
+			if (keepOpen && this.isOpen) {
+				// A multi-select pick refreshes the open list in place, but the list's
+				// height and the input's position (a new chip row) can both change.
+				this.reposition();
+			} else {
+				this.open(this.app.dom.appContainerEl, this.inputEl);
+			}
 		} catch (error) {
 			log.logError(error as Error);
-			this.close();
+			if (!keepOpen) this.close();
 		}
 	}
 
-	private showNoResultsAndClose(): void {
-		// Clear any existing timeout
-		if (this.noResultsTimeout) {
-			getOwnerWindow(this.inputEl).clearTimeout(this.noResultsTimeout);
+	/**
+	 * Enter picks from the list, but the list follows the text a debounce
+	 * later. A fast typist's Enter can land in between: build the list for the
+	 * text first, so Enter never picks a row the text no longer matches.
+	 */
+	private async useSelectedItem(event: KeyboardEvent): Promise<void> {
+		if (this.inputEl.value !== this.listQuery) {
+			this.debouncedOnInputChanged.cancel();
+			await this.onInputChanged();
+			if (this.inputEl.value !== this.listQuery || !this.suggest.getIsOpen()) return;
 		}
-
-		// Close immediately for now - could add "No matches" placeholder here
-		this.close();
+		this.suggest.useSelectedItem(event);
 	}
 
 	open(container: HTMLElement, inputEl: HTMLElement): void {
 		// An async getSuggestions() may resolve after destroy() and reach open();
 		// refuse to re-open a destroyed instance (would spawn an orphaned popup).
 		if (this.destroyed || inputEl.closest("[hidden]")) return;
-		// Always add listeners; if already open just update popper position
-		if (!this.isOpen) {
+		// open() also runs on every keystroke while the list is open, to refresh
+		// it (onInputChanged). The scope and global listeners are added once,
+		// when the list opens, and removed together in close().
+		const opening = !this.isOpen;
+		if (opening) {
 			this.app.keymap.pushScope(this.scope);
 		}
 		this.isOpen = true;
@@ -420,59 +499,25 @@ export abstract class TextInputSuggest<T> implements ISuggestOwner<T> {
 		const ownerCompatibleContainer =
 			containerDocument === inputDocument ? container : inputDocument.body;
 		ownerCompatibleContainer.appendChild(this.suggestEl);
+		this.reposition();
+		if (!opening) return;
 
-		// open() runs on every keystroke (onInputChanged re-opens to refresh the
-		// suggestions). If a Popper already exists, reposition it instead of
-		// creating a new one — recreating here would leak a Popper instance, and
-		// the scroll/resize listeners it attaches, on every keystroke. The Popper
-		// (and the global listeners below) are torn down together in close().
-		if (this.popper) {
-			void this.popper.update();
-			return;
-		}
-
-		this.popper = createPopper(inputEl, this.suggestEl, {
-			placement: "bottom-start",
-			modifiers: [
-				{
-					name: "sameWidth",
-					enabled: true,
-					fn: ({ state, instance }) => {
-						const targetWidth = `${state.rects.reference.width}px`;
-						if (state.styles.popper.width === targetWidth) {
-							return;
-						}
-						state.styles.popper.width = targetWidth;
-						void instance.update();
-					},
-					phase: "beforeWrite",
-					requires: ["computeStyles"],
-				},
-				{
-					name: "flip",
-					enabled: true,
-				},
-				{
-					name: "preventOverflow",
-					enabled: true,
-				},
-				{
-					name: "offset",
-					enabled: true,
-					options: {
-						offset: [0, 4],
-					},
-				},
-			],
-		});
-
-		// Add global listeners (paired with the Popper lifecycle: removed in close()).
-		const activeDocument = inputDocument;
 		const activeWindow = getOwnerWindow(inputEl);
-		activeDocument.addEventListener("pointerdown", this.globalClickListener, true);
-		activeDocument.addEventListener("wheel", this.globalWheelListener, true);
+		inputDocument.addEventListener("pointerdown", this.globalClickListener, true);
+		inputDocument.addEventListener("wheel", this.globalWheelListener, true);
+		inputDocument.addEventListener("scroll", this.globalScrollListener, true);
 		activeWindow.addEventListener("resize", this.globalResizeListener);
+		activeWindow.addEventListener("keyboardDidShow", this.globalKeyboardListener);
 		activeWindow.addEventListener("blur", this.globalBlurListener);
+	}
+
+	/**
+	 * Re-place the open list after its contents or its input moved. The side
+	 * is re-decided each time because the list's height changes as the user
+	 * types.
+	 */
+	private reposition(): void {
+		placeList(this.inputEl, this.suggestEl);
 	}
 
 	close(): void {
@@ -487,26 +532,16 @@ export abstract class TextInputSuggest<T> implements ISuggestOwner<T> {
 		this.suggest.close();
 		this.suggest.setSuggestions([]);
 
-		// Destroy Popper instance
-		if (this.popper) {
-			this.popper.destroy();
-			this.popper = null;
-		}
-
 		this.suggestEl.remove();
-
-		// Clear no results timeout
-		if (this.noResultsTimeout) {
-			getOwnerWindow(this.inputEl).clearTimeout(this.noResultsTimeout);
-			this.noResultsTimeout = null;
-		}
 
 		// Remove global listeners
 		const activeDocument = getOwnerDocument(this.inputEl);
 		const activeWindow = getOwnerWindow(this.inputEl);
 		activeDocument.removeEventListener("pointerdown", this.globalClickListener, true);
 		activeDocument.removeEventListener("wheel", this.globalWheelListener, true);
+		activeDocument.removeEventListener("scroll", this.globalScrollListener, true);
 		activeWindow.removeEventListener("resize", this.globalResizeListener);
+		activeWindow.removeEventListener("keyboardDidShow", this.globalKeyboardListener);
 		activeWindow.removeEventListener("blur", this.globalBlurListener);
 
 		// Intentionally keep this instance registered in instanceMap. close()

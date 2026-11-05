@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { App, Notice } from "obsidian";
 import * as obsidian from "obsidian";
@@ -44,7 +45,7 @@ describe("API modernization", () => {
 			},
 		]);
 		expect(requestUrlSpy).toHaveBeenCalledWith({
-			url: "https://api.github.com/repos/owner/repo/releases",
+			url: "https://api.github.com/repos/owner/repo/releases?per_page=100",
 			throw: false,
 		});
 

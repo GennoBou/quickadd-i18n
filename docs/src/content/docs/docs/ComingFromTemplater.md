@@ -14,7 +14,7 @@ New to QuickAdd entirely? Start with [Getting Started](/docs/) for the choice ty
 
 ## Point QuickAdd at your template folder
 
-You don't need to move or rewrite your template files to start. Add your existing template folder(s) under **Template folder paths** in [Settings → Templates & properties](/docs/Settings/#templates--properties). That single step powers:
+You don't need to move or rewrite your template files to start. Add your existing template folder(s) under [Settings → QuickAdd → Template folders](/docs/Settings/#template-folders). That single step powers:
 
 - the **QuickAdd: New note from template** command, which lists every template in those folders and prompts for the new note's name - no per-template setup;
 - the **QuickAdd: Apply template to active note** command, whose picker offers those template files too;
@@ -41,7 +41,7 @@ The left column names the job; the middle names the Templater expression you may
 | Link back to the note you came from | `tp.file.path` workarounds | [`{{LINKCURRENT}}`](/docs/FormatSyntax/#linkcurrent) (a link), [`{{FILENAMECURRENT}}`](/docs/FormatSyntax/#filenamecurrent) (raw name, for embeds like `![[{{FILENAMECURRENT}}#Heading]]`), [`{{LINKSECTION}}`](/docs/FormatSyntax/#linksection) (link to the heading you're in) |
 | Run JavaScript | `tp.user` | [Inline scripts](/docs/InlineScripts/), [user scripts in macros](/docs/Choices/MacroChoice/), [`{{MACRO:...}}`](/docs/FormatSyntax/#macro) |
 | Folder templates | folder templates | No automatic equivalent - see [Templates chosen by folder](#templates-chosen-by-folder) |
-| Cursor marker in a template | `tp.file.cursor` | No direct equivalent - see [Where the cursor lands](#where-the-cursor-lands) |
+| Cursor marker | `tp.file.cursor` | `{{CURSOR}}` in Template or Capture bodies - see [Where the cursor lands](#where-the-cursor-lands) |
 
 ## Create new notes from templates
 
@@ -49,7 +49,7 @@ A [Template choice](/docs/Choices/TemplateChoice/) creates a note from a templat
 
 To position user input at an exact spot in the new note, put the token exactly where the text belongs. One named value can drive both the file name and the body:
 
-File name format: `{{VALUE:topic}}`
+File name: `{{VALUE:topic}}`
 
 ```markdown
 ---
@@ -76,14 +76,14 @@ A [Capture choice](/docs/Choices/CaptureChoice/) whose format is `{{TEMPLATE:Tem
 
 ### Today's daily note
 
-Appending to today's note is a Capture choice with a date-formatted target path - the file doesn't have to exist beforehand:
+Appending to today's note is a Capture choice that targets the daily note - the file doesn't have to exist beforehand:
 
-- **Capture to**: `Daily/{{DATE}}.md`
-- **Create file if it doesn't exist**, with your daily template
+- **Capture to**: [`{{DAILY}}`](/docs/FormatSyntax/#daily), the note **Open today's daily note** opens. Click **Daily note** next to the field to fill it in (QuickAdd 2.30.0 or later).
+- **Create file if it doesn't exist**, with **Create file with a template** set to your daily template, so QuickAdd fills in its tokens
 - **Insert after**: `## Log`, with **Create line if not found**
 - **Capture format**: `- {{VALUE}}`
 
-Say today is 2026-07-06: running it and typing `did a thing` creates `Daily/2026-07-06.md` from the template on first capture and appends `- did a thing` under `## Log` - one hotkey, with or without an existing note. For a step-by-step walkthrough with variations, see [Capture: Add entries to your daily note](/docs/Examples/Capture_ToDailyNote/); [Capture choices](/docs/Choices/CaptureChoice/) covers every target and position option.
+Say today is 2026-07-06 and your daily notes live in `Daily`: running it and typing `did a thing` creates `Daily/2026-07-06.md` from the template on first capture and appends `- did a thing` under `## Log` - one hotkey, with or without an existing note. Before QuickAdd 2.30.0, set **Capture to** to a date-formatted path such as `Daily/{{DATE}}.md` instead. For a step-by-step walkthrough with variations, see [Capture: Add entries to your daily note](/docs/Examples/Capture_ToDailyNote/); [Capture choices](/docs/Choices/CaptureChoice/) covers every target and position option.
 
 ## Templates chosen by folder
 
@@ -115,7 +115,7 @@ Named values are shared across an entire run. `{{VALUE:topic}}` in the file name
 
 That sharing spans [Macro choice](/docs/Choices/MacroChoice/) steps too. A classic two-step flow - log a task in today's daily note and create its note - is a macro of two choices sharing one name:
 
-1. A Capture choice into `Daily/{{DATE}}.md` with the format `- [ ] [[{{VALUE:task}}]]`
+1. A Capture choice into `{{DAILY}}` (before QuickAdd 2.30.0, `Daily/{{DATE}}.md`) with the format `- [ ] [[{{VALUE:task}}]]`
 2. A Template choice with file name format `{{VALUE:task}}` creating the note in your `Tasks` folder
 
 You type the task name once. Scripts join the same pool: anything a script assigns to `params.variables.task` is what `{{VALUE:task}}` resolves to in later steps - see the [scripting guide](/docs/Advanced/ScriptingGuide/).
@@ -124,11 +124,14 @@ To gather every prompt on a single form up front instead of one dialog at a time
 
 ## Where the cursor lands
 
-QuickAdd has no in-template cursor marker of its own - you can't mark an arbitrary spot in a template and land there. What you can control:
+Use [`{{CURSOR}}`](/docs/FormatSyntax/#cursor) to mark a position in a Template
+or Capture body. QuickAdd moves there if the target is already focused in an
+editing mode, or if **Open** opens and focuses it. Templater's cursor jump takes
+precedence when both are present.
 
-- **Captures follow the insertion.** With **Capture to active file**, the cursor ends up right after the inserted text; with **Open** enabled on other targets (opened focused, in an editing mode), QuickAdd places the cursor immediately after the inserted text.
-- **Apply template to active note** offers an **Insert at cursor** mode, so content lands where you already are.
-- **After creating a note**, a Template choice with **Open** doesn't move the cursor - you typically land at the top of the note. To end at the bottom instead, wrap the Template choice in a [Macro choice](/docs/Choices/MacroChoice/) and add the **Move cursor to file end** editor command as the next step (file start and line start/end variants exist too).
+- Unmarked Captures keep their existing behavior. Inserting at the cursor or on an adjacent line leaves the cursor after the inserted text. Other body Captures place it at the end of the insertion when **Open** opens and focuses the target in an editing mode.
+- **Apply template to active note** supports the marker in every mode, including **Insert at cursor**.
+- Without a marker, a Template choice with **Open** keeps its usual cursor position, typically at the top of a new note. To move to the end instead, put `{{CURSOR}}` at the end of your template.
 
 ## Run scripts
 
@@ -145,4 +148,5 @@ These are the classic symptoms of splitting one template between two engines - e
 
 - **You get prompted twice.** QuickAdd resolves all of its prompts before the file is created. If another engine prompts in the same template, you answer twice - once per engine. Let QuickAdd own the prompt with `{{VALUE:name}}` and reuse the answer everywhere it's needed.
 - **Template syntax shows up unrendered.** QuickAdd renders QuickAdd tokens; another engine's syntax is only rendered by that engine. If it isn't installed or doesn't run on the file, its markup stays behind as literal text. Port the line to the matching token from [the map](#the-quick-map).
+- **Templater code runs twice.** A macro that runs Templater's **Replace templates in the active file** right after a QuickAdd Template or Capture step runs the templates a second time: QuickAdd already ran them when it wrote the note. That step is deprecated, and QuickAdd 2.30.0 or later shows a notice once per session when a macro runs it. Remove it from the macro.
 - **Capturing into a note throws template errors.** A note that keeps live template syntax can re-execute or error whenever a plugin processes the file again. QuickAdd tokens like `{{DATE:YYYY-MM-DD}}` render once, at creation, into plain text - later captures find nothing to re-run. Migrate the offending line to a QuickAdd token and let QuickAdd create the note so the token renders - a Capture with **Create file if it doesn't exist** plus that template does both (see [Today's daily note](#todays-daily-note)).

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type QuickAdd from "../main";
 import { setQuickAddInstance } from "../quickAddInstance";
@@ -95,11 +96,11 @@ describe("OnePageInputModal peek", () => {
 		input.dispatchEvent(new Event("input", { bubbles: true }));
 
 		const buttons = Array.from(
-			modal.contentEl.querySelectorAll("button"),
+			modal.modalEl.querySelectorAll("button"),
 		);
-		const peekButton = findButton(modal.contentEl, "Peek at note");
+		const peekButton = findButton(modal.modalEl, "Peek at note");
 		expect(peekButton.classList.contains("qa-peek-button")).toBe(true);
-		expect(buttons.indexOf(findButton(modal.contentEl, "Submit"))).toBeLessThan(
+		expect(buttons.indexOf(findButton(modal.modalEl, "Submit"))).toBeLessThan(
 			buttons.indexOf(peekButton),
 		);
 		peekButton.click();
@@ -118,7 +119,7 @@ describe("OnePageInputModal peek", () => {
 
 		PromptPeekSession.getActive()?.resume();
 		expect(modal.containerEl.classList.contains(PEEK_HIDDEN_CLASS)).toBe(false);
-		findButton(modal.contentEl, "Submit").click();
+		findButton(modal.modalEl, "Submit").click();
 
 		await expect(modal.waitForClose).resolves.toEqual({
 			title: "Draft title",
@@ -129,7 +130,7 @@ describe("OnePageInputModal peek", () => {
 		const modal = new OnePageInputModal(fakeApp as never, [
 			{ id: "title", label: "Title", type: "text" },
 		]);
-		findButton(modal.contentEl, "Peek at note").click();
+		findButton(modal.modalEl, "Peek at note").click();
 
 		const chip = document.querySelector(".qa-peek-chip") as HTMLElement;
 		findButton(chip, "Cancel").click();
@@ -149,6 +150,25 @@ describe("OnePageInputModal peek", () => {
 
 		expect(modal.containerEl.classList.contains(PEEK_HIDDEN_CLASS)).toBe(true);
 		expect(document.querySelector(".qa-peek-chip")).not.toBeNull();
+		modal.close();
+		await expect(modal.waitForClose).rejects.toBeInstanceOf(UserCancelError);
+	});
+
+	it("offers no peek over another plugin's modal", async () => {
+		document.body.createDiv({ cls: "modal-container" });
+
+		const modal = new OnePageInputModal(fakeApp as never, [
+			{ id: "title", label: "Title", type: "text" },
+		]);
+		findButton(modal.modalEl, "Peek at note").click();
+		expect(PromptPeekSession.isPeeking()).toBe(false);
+
+		const scope = modal.scope as unknown as {
+			trigger: (key: string) => unknown;
+		};
+		scope.trigger("E");
+		expect(PromptPeekSession.isPeeking()).toBe(false);
+
 		modal.close();
 		await expect(modal.waitForClose).rejects.toBeInstanceOf(UserCancelError);
 	});
@@ -178,12 +198,12 @@ describe("OnePageInputModal peek", () => {
 		second.focus();
 		second.setSelectionRange(second.value.length, second.value.length);
 
-		findButton(modal.contentEl, "Peek at note").click();
+		findButton(modal.modalEl, "Peek at note").click();
 		const chip = document.querySelector(".qa-peek-chip") as HTMLElement;
 		findButton(chip, "Insert").click();
 
 		expect(second.value).toBe("before selected");
-		findButton(modal.contentEl, "Submit").click();
+		findButton(modal.modalEl, "Submit").click();
 		await expect(modal.waitForClose).resolves.toEqual({
 			first: "unchanged",
 			second: "before selected",
@@ -205,13 +225,13 @@ describe("OnePageInputModal peek", () => {
 			},
 		]);
 
-		findButton(modal.contentEl, "Peek at note").click();
+		findButton(modal.modalEl, "Peek at note").click();
 		expect(modal.containerEl.classList.contains(PEEK_HIDDEN_CLASS)).toBe(true);
 		const chip = document.querySelector(".qa-peek-chip") as HTMLElement;
 		findButton(chip, "Insert").click();
 
 		expect(modal.containerEl.classList.contains(PEEK_HIDDEN_CLASS)).toBe(false);
-		findButton(modal.contentEl, "Submit").click();
+		findButton(modal.modalEl, "Submit").click();
 		await expect(modal.waitForClose).resolves.toEqual({ count: "4" });
 	});
 });

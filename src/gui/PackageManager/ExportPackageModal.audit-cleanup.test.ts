@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, waitFor } from "@testing-library/svelte";
 import { Notice } from "obsidian";
@@ -89,7 +90,7 @@ async function selectRootAndSave(): Promise<{ close: ReturnType<typeof vi.fn> }>
 	await fireEvent.change(checkbox, { target: { checked: true } });
 
 	const saveButton = container.querySelector(
-		".saveRow button",
+		".qa-export-save button",
 	) as HTMLButtonElement;
 	await fireEvent.click(saveButton);
 

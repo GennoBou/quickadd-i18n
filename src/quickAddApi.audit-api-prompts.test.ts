@@ -68,7 +68,9 @@ vi.mock("./settingsStore", () => ({
 		}),
 	},
 }));
-vi.mock("./utilityObsidian", () => ({ getDate: vi.fn() }));
+vi.mock("./utils/dates", () => ({
+	getDate: vi.fn(),
+}));
 vi.mock("./utils/errorUtils", async () => {
 	// eslint-disable-next-line @typescript-eslint/consistent-type-imports
 	const actual = await vi.importActual<typeof import("./utils/errorUtils")>(
@@ -102,11 +104,8 @@ function makeChoiceExecutor() {
 	};
 }
 
-function makePlugin(overrides: Record<string, unknown> = {}) {
-	return {
-		getChoiceByName: vi.fn(() => ({ name: "choice", id: "1" })),
-		...overrides,
-	} as unknown as QuickAdd;
+function makePlugin(choices: unknown[] = []) {
+	return { settings: { choices } } as unknown as QuickAdd;
 }
 
 function getApi(
@@ -127,19 +126,13 @@ beforeEach(() => {
 });
 
 // ===========================================================================
-// executeChoice — production getChoiceByName THROWS for an unknown name.
+// executeChoice on a name no choice has.
 // (audit: api-execute-choice)
 // ===========================================================================
-describe("executeChoice on an unknown choice (throwing getChoiceByName)", () => {
-	it("reports the error and returns instead of propagating the throw", async () => {
-		// Mirror production main.ts:getChoiceByName, which throws (never returns falsy).
-		const plugin = makePlugin({
-			getChoiceByName: vi.fn(() => {
-				throw new Error("Choice typo not found");
-			}),
-		});
+describe("executeChoice on an unknown choice", () => {
+	it("reports the error and returns instead of throwing", async () => {
 		const executor = makeChoiceExecutor();
-		const { api } = getApi(makeApp(), plugin, executor);
+		const { api } = getApi(makeApp(), makePlugin(), executor);
 
 		await expect(api.executeChoice("typo")).resolves.toBeUndefined();
 		expect(mocks.reportError).toHaveBeenCalled();
@@ -148,14 +141,13 @@ describe("executeChoice on an unknown choice (throwing getChoiceByName)", () => 
 	});
 
 	it("still executes a found choice and clears variables", async () => {
-		const choice = { name: "MyChoice", id: "id1" };
+		const choice = { name: "MyChoice", id: "id1", type: "Template", command: false };
 		const executor = makeChoiceExecutor();
-		const plugin = makePlugin({ getChoiceByName: vi.fn(() => choice) });
-		const { api } = getApi(makeApp(), plugin, executor);
+		const { api } = getApi(makeApp(), makePlugin([choice]), executor);
 
 		await api.executeChoice("MyChoice", { foo: "bar" });
 
-		expect(executor.execute).toHaveBeenCalledWith(choice);
+		expect(executor.execute).toHaveBeenCalledWith(choice, undefined);
 		expect(executor.variables.size).toBe(0);
 		expect(mocks.reportError).not.toHaveBeenCalled();
 	});
@@ -174,7 +166,7 @@ describe("getFieldValues frontmatter array safety", () => {
 		return makeApp({
 			vault: {
 				getMarkdownFiles: () => files,
-				read: read ?? (async () => ""),
+				cachedRead: read ?? (async () => ""),
 			},
 			metadataCache: {
 				getFileCache: (file: FakeFile) => ({
@@ -221,5 +213,37 @@ describe("getFieldValues frontmatter array safety", () => {
 		});
 		// The unreadable a.md is skipped; b.md still contributes.
 		expect(values).toEqual(["high"]);
+	});
+});
+
+describe("script prompts in a non-interactive run", () => {
+	type Api = ReturnType<typeof QuickAddApi.GetApi>;
+	const prompts: Array<[string, (api: Api) => Promise<unknown>]> = [
+		["suggester", (api) => api.suggester(["a"], ["a"], "Pick a source")],
+		["inputPrompt", (api) => api.inputPrompt("Title")],
+		["wideInputPrompt", (api) => api.wideInputPrompt("Body")],
+		["yesNoPrompt", (api) => api.yesNoPrompt("Sure?")],
+		["checkboxPrompt", (api) => api.checkboxPrompt(["x"], [], "Tags")],
+		["infoDialog", (api) => api.infoDialog("Heads up", "text")],
+		["datePrompt", (api) => api.datePrompt("When")],
+		["requestInputs", (api) => api.requestInputs([{ id: "q", label: "Question", type: "text" }])],
+	];
+
+	it.each(prompts)("%s rejects with an abort instead of opening a modal", async (_, open) => {
+		const executor = { ...makeChoiceExecutor(), interactive: false };
+		const { api } = getApi(makeApp(), makePlugin(), executor);
+
+		await expect(open(api)).rejects.toMatchObject({
+			name: "MacroAbortError",
+			message: expect.stringContaining("this run is non-interactive"),
+		});
+	});
+
+	it("requestInputs still resolves from variables preset by the caller", async () => {
+		const executor = { ...makeChoiceExecutor(), interactive: false };
+		executor.variables.set("q", "preset");
+		const { api } = getApi(makeApp(), makePlugin(), executor);
+
+		await expect(api.requestInputs([{ id: "q", label: "Question", type: "text" }])).resolves.toEqual({ q: "preset" });
 	});
 });

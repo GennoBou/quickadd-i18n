@@ -14,6 +14,8 @@ export class SingleTemplateEngine extends TemplateEngine {
 	 * so its prompts must not claim to be asking for note content (issue #1546).
 	 */
 	private promptScope: PromptScopeKind = "noteBody";
+	private preserveCursorMarkers = false;
+	private keepUserTextProtected = false;
 
 	constructor(
 		app: App,
@@ -23,6 +25,15 @@ export class SingleTemplateEngine extends TemplateEngine {
 		inclusion?: TemplateInclusionState,
 	) {
 		super(app, plugin, choiceExecutor, inclusion);
+	}
+
+	public setPreserveCursorMarkers(preserve: boolean): void {
+		this.preserveCursorMarkers = preserve;
+	}
+
+	/** The caller restores user text once it has run Templater on the result. */
+	public setKeepUserTextProtected(keep: boolean): void {
+		this.keepUserTextProtected = keep;
 	}
 
 	public setPromptScope(scope: PromptScopeKind): void {
@@ -44,9 +55,12 @@ export class SingleTemplateEngine extends TemplateEngine {
 			log.logError(`Template ${resolvedTemplatePath} not found.`);
 		}
 
+		const format = () => this.preserveCursorMarkers
+			? this.formatter.formatTemplateContent(templateContent)
+			: this.formatter.formatFileContent(templateContent);
 		templateContent = await this.formatter.withTemplatePropertyCollection(() =>
 			this.formatter.withPromptScope(this.promptScope, templateContent, () =>
-				this.formatter.formatFileContent(templateContent),
+				this.keepUserTextProtected ? this.formatter.withUserTextProtected(format) : format(),
 			),
 		);
 

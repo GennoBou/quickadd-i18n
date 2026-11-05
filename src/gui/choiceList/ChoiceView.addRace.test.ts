@@ -1,8 +1,7 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi, afterEach } from "vitest";
 
-vi.mock("obsidian-dataview", () => ({ getAPI: vi.fn() }));
-
-// The builder modal, held open: the deferred stands in for the user configuring
+// The builder page, held open: the deferred stands in for the user configuring
 // the brand-new choice while the rest of the app keeps running.
 const { configureChoiceMock } = vi.hoisted(() => ({
 	configureChoiceMock: vi.fn(),
@@ -43,7 +42,7 @@ describe("ChoiceView new-choice race (#1625)", () => {
 	const initialState = settingsStore.getState();
 
 	afterEach(() => {
-		settingsStore.setState(initialState, true);
+		settingsStore.replaceState(initialState);
 		configureChoiceMock.mockReset();
 		MenuStub.lastShown = null;
 	});
@@ -57,13 +56,19 @@ describe("ChoiceView new-choice race (#1625)", () => {
 			settingsStore.setState({ choices: next as IChoice[] });
 		});
 
+		// The builder page saves when it is left, with the choice as it opened.
 		let finishConfigure: (choice: IChoice) => void = () => {};
 		configureChoiceMock.mockImplementation(
-			(choice: IChoice) =>
-				new Promise<IChoice>((resolve) => {
-					finishConfigure = (configured) =>
-						resolve({ ...choice, ...configured });
-				}),
+			(
+				choice: IChoice,
+				_app: unknown,
+				_plugin: unknown,
+				onSave: (edited: IChoice, base: IChoice) => void,
+			) => {
+				const base = JSON.parse(JSON.stringify(choice)) as IChoice;
+				finishConfigure = (configured) => onSave({ ...base, ...configured }, base);
+				return true;
+			},
 		);
 
 		const { getByLabelText } = render(ChoiceView, {
@@ -72,6 +77,7 @@ describe("ChoiceView new-choice race (#1625)", () => {
 				plugin: {} as unknown as QuickAdd,
 				choices: settingsStore.getState().choices,
 				saveChoices,
+				openAISettings: vi.fn(),
 			},
 		});
 
@@ -89,7 +95,7 @@ describe("ChoiceView new-choice race (#1625)", () => {
 		// modelSyncService produces a few seconds after launch).
 		settingsStore.setState({ disableOnlineFeatures: true });
 
-		// The builder closes with the configured choice.
+		// The builder page is left with the configured choice.
 		finishConfigure({ name: "Configured template" } as IChoice);
 
 		await vi.waitFor(() => {

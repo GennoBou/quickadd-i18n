@@ -38,12 +38,22 @@ let lastNamedFormat = "";
 </LabeledField>
 
 <SettingItem name={t("Action")} desc={config.action === "addToList"
-	? t("Add captured values to the property's list, keeping existing items and skipping duplicates.")
-	: t("Replace the property's value with the captured value.")}>
+	? config.sort === "none"
+		? t("Each line is one item. New items go below the existing ones. Put {{PROPERTY}} on its own line to choose where the existing items go.")
+		: t("Each line is one item.")
+	: t("Replaces the value. For a list, each line is one item. Put {{PROPERTY}} where the current value should stay. A Text property keeps all lines as one value. A property with no type yet rejects several lines. Use Add to list, or set the type to Text in Obsidian first.")}>
 	{#snippet control()}
 		<Dropdown value={config.action}
 			options={[{ value: "set", label: t("Set value") }, { value: "addToList", label: t("Add to list") }]}
 			onchange={(value) => { config.action = value === "addToList" ? "addToList" : "set"; }} />
+	{/snippet}
+</SettingItem>
+
+<SettingItem name={t("Sort list")}>
+	{#snippet control()}
+		<Dropdown value={config.sort}
+			options={[{ value: "none", label: t("Keep order") }, { value: "asc", label: t("Ascending") }, { value: "desc", label: t("Descending") }]}
+			onchange={(value) => { config.sort = value === "asc" || value === "desc" ? value : "none"; }} />
 	{/snippet}
 </SettingItem>
 
