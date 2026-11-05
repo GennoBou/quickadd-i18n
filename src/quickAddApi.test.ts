@@ -1,7 +1,9 @@
 import { createChoiceExecutor } from "../tests/helpers/createChoiceExecutor";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { App } from "obsidian";
+import { getDateVariableFormat, rememberDateVariableFormat } from "./formatters/helpers/dateTokens";
 import type QuickAdd from "./main";
+import type { CallerDay } from "./types/dateOrigin";
 
 // ---------------------------------------------------------------------------
 // Hoisted mock state / spies. These back the vi.mock factories below.
@@ -130,7 +132,7 @@ vi.mock("./settingsStore", () => ({
 	},
 }));
 
-vi.mock("./utilityObsidian", () => ({
+vi.mock("./utils/dates", () => ({
 	getDate: mocks.getDate,
 }));
 
@@ -184,16 +186,12 @@ function makeChoiceExecutor() {
 		consumeAbortSignal: vi.fn(
 			(): InstanceType<typeof MacroAbortError> | null => null,
 		),
-		pickDate: false as boolean | undefined,
-		clocks: undefined as { now: Date; date?: Date } | undefined,
+		callerDay: undefined as CallerDay | undefined,
 	};
 }
 
-function makePlugin(overrides: Record<string, unknown> = {}) {
-	return {
-		getChoiceByName: vi.fn(() => ({ name: "choice", id: "1" })),
-		...overrides,
-	} as unknown as QuickAdd;
+function makePlugin(choices: unknown[] = [{ name: "C", id: "1", type: "Template", command: false }]) {
+	return { settings: { choices } } as unknown as QuickAdd;
 }
 
 function getApi(
@@ -966,25 +964,23 @@ describe("ai.chunkedPrompt validation", () => {
 // ===========================================================================
 describe("executeChoice", () => {
 	it("looks up the choice, sets variables, and executes it", async () => {
-		const choice = { name: "MyChoice", id: "id1" };
+		const choice = { name: "MyChoice", id: "id1", type: "Template", command: false };
 		const executor = makeChoiceExecutor();
-		const plugin = makePlugin({ getChoiceByName: vi.fn(() => choice) });
-		const { api } = getApi(makeApp(), plugin, executor);
+		const { api } = getApi(makeApp(), makePlugin([choice]), executor);
 
 		await api.executeChoice("MyChoice", { foo: "bar" });
 
-		expect(plugin.getChoiceByName).toHaveBeenCalledWith("MyChoice");
-		expect(executor.execute).toHaveBeenCalledWith(choice);
+		expect(executor.execute).toHaveBeenCalledWith(choice, undefined);
 		// Variables are cleared after execution.
 		expect(executor.variables.size).toBe(0);
 	});
 
 	it("reports an error when the choice is not found", async () => {
-		const plugin = makePlugin({ getChoiceByName: vi.fn(() => undefined) });
 		const executor = makeChoiceExecutor();
-		const { api } = getApi(makeApp(), plugin, executor);
+		const { api } = getApi(makeApp(), makePlugin(), executor);
 		await api.executeChoice("Missing");
 		expect(mocks.reportError).toHaveBeenCalled();
+		expect(executor.execute).not.toHaveBeenCalled();
 	});
 
 	it("throws the abort signal when the executor reports one", async () => {
@@ -1006,13 +1002,14 @@ describe("executeChoice", () => {
 		expect(executor.execute).toHaveBeenCalled();
 	});
 
-	it("treats date ask as pickDate and still executes", async () => {
+	it("treats date ask as a pick for that call only", async () => {
 		const executor = makeChoiceExecutor();
+		let callerDayDuringRun: unknown;
+		executor.execute.mockImplementation(async () => { callerDayDuringRun = executor.callerDay; });
 		const { api } = getApi(makeApp(), makePlugin(), executor);
 		await api.executeChoice("C", {}, { date: "ask" });
-		expect(executor.execute).toHaveBeenCalled();
-		expect(executor.pickDate).toBe(true);
-		expect(executor.clocks).toBeUndefined();
+		expect(callerDayDuringRun).toBe("pick");
+		expect(executor.callerDay).toBeUndefined();
 	});
 
 	it("rejects an invalid Date origin and does not execute", async () => {
@@ -1049,6 +1046,45 @@ describe("format", () => {
 		// The temporary variable must NOT leak; the original snapshot is restored.
 		expect(executor.variables.get("pre")).toBe("existing");
 		expect(executor.variables.has("temp")).toBe(false);
+	});
+
+	it("restores the VDATE formats with the variables (#645)", async () => {
+		const answer = "@date:2024-02-25T12:00:00.000Z";
+		const executor = makeChoiceExecutor();
+		executor.variables.set("start", answer);
+		rememberDateVariableFormat(executor.variables, "start", "YYYY");
+		mocks.formatFileContent.mockImplementationOnce(async () => {
+			rememberDateVariableFormat(executor.variables, "due", "DD.MM.YYYY");
+			return "out";
+		});
+		const { api } = getApi(makeApp(), makePlugin(), executor);
+
+		await api.format("in", { due: answer });
+
+		// The caller's format survives; the call's own is gone, even if a later
+		// call supplies the same date.
+		expect(getDateVariableFormat(executor.variables, "start")).toBe("YYYY");
+		executor.variables.set("due", answer);
+		expect(getDateVariableFormat(executor.variables, "due")).toBeUndefined();
+	});
+
+	it("restores the variables when a prompt is cancelled (#1871)", async () => {
+		const executor = makeChoiceExecutor();
+		executor.variables.set("pre", "existing");
+		const cancel = promptCancelled();
+		mocks.formatFileContent.mockImplementationOnce(async () => {
+			// The date was answered, then the next prompt was dismissed.
+			executor.variables.set("due", "@date:2024-02-25T12:00:00.000Z");
+			rememberDateVariableFormat(executor.variables, "due", "YYYY-MM-DD");
+			throw cancel;
+		});
+		const { api } = getApi(makeApp(), makePlugin(), executor);
+
+		await expect(api.format("in", { temp: "value" })).rejects.toBe(cancel);
+
+		expect([...executor.variables.entries()]).toEqual([["pre", "existing"]]);
+		executor.variables.set("due", "@date:2024-02-25T12:00:00.000Z");
+		expect(getDateVariableFormat(executor.variables, "due")).toBeUndefined();
 	});
 
 	it("keeps injected variables when shouldClearVariables is false", async () => {
@@ -1223,7 +1259,7 @@ describe("fieldSuggestions.getFieldValues", () => {
 		return makeApp({
 			vault: {
 				getMarkdownFiles: () => files,
-				read: async (file: FakeFile) => contentByPath[file.path] ?? "",
+				cachedRead: async (file: FakeFile) => contentByPath[file.path] ?? "",
 			},
 			metadataCache: {
 				getFileCache: (file: FakeFile) => ({
@@ -1280,7 +1316,7 @@ describe("fieldSuggestions.getFieldValues", () => {
 		const app = makeApp({
 			vault: {
 				getMarkdownFiles: () => [{ path: "a.md" }],
-				read: readSpy,
+				cachedRead: readSpy,
 			},
 			metadataCache: { getFileCache: () => ({ frontmatter: {} }) },
 		});

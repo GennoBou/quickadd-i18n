@@ -35,6 +35,7 @@ export const FIELD_FILTER_KEYS = [
 	"case-sensitive",
 	"multi",
 	"format",
+	"label",
 ] as const;
 
 /**
@@ -107,7 +108,7 @@ export function describeUnknownFieldFilter(
  * its siblings. This is also what a live preview sees for the one keystroke
  * between `|folder` and `|folder:`, so it has to read as "not finished yet".
  */
-export function describeValuelessFieldFilter(
+function describeValuelessFieldFilter(
 	filterKey: string,
 	input: string,
 ): string {
@@ -168,6 +169,8 @@ export class FieldSuggestionParser {
 		filters: FieldFilter;
 		multiSelect?: boolean;
 		multiFormat?: MultiValueFormat;
+		/** The prompt's own wording, shown instead of "Enter value for <field>". */
+		label?: string;
 	} {
 		const parts = splitPipeParts(input).map((p) => p.trim());
 		const fieldName = parts[0];
@@ -175,6 +178,7 @@ export class FieldSuggestionParser {
 		let multiSelect = false;
 		let multiFormat: MultiValueFormat = "auto";
 		let multiFormatExplicit = false;
+		let label: string | undefined;
 
 		for (let i = 1; i < parts.length; i++) {
 			const filterPart = parts[i];
@@ -222,6 +226,9 @@ export class FieldSuggestionParser {
 			}
 
 			switch (filterType) {
+				case "label":
+					label = filterValue || undefined;
+					break;
 				case "multi":
 					multiSelect = parseBooleanFlag(filterValue);
 					break;
@@ -235,18 +242,14 @@ export class FieldSuggestionParser {
 						) ?? "auto";
 					break;
 				case "folder":
-					if (!filters.folders) {
-						filters.folders = [];
-					}
+					filters.folders ??= [];
 					filters.folders.push(filterValue);
 					if (!filters.folder) {
 						filters.folder = filterValue;
 					}
 					break;
 				case "tag": {
-					if (!filters.tags) {
-						filters.tags = [];
-					}
+					filters.tags ??= [];
 					// Remove # prefix if present
 					const tagName = filterValue.startsWith("#")
 						? filterValue.substring(1)
@@ -258,9 +261,7 @@ export class FieldSuggestionParser {
 					filters.inline = filterValue.toLowerCase() === "true";
 					break;
 				case "inline-code-blocks":
-					if (!filters.inlineCodeBlocks) {
-						filters.inlineCodeBlocks = [];
-					}
+					filters.inlineCodeBlocks ??= [];
 					filters.inlineCodeBlocks.push(
 						...filterValue
 							.split(",")
@@ -288,15 +289,11 @@ export class FieldSuggestionParser {
 					filters.caseSensitive = filterValue.toLowerCase() === "true";
 					break;
 				case "exclude-folder":
-					if (!filters.excludeFolders) {
-						filters.excludeFolders = [];
-					}
+					filters.excludeFolders ??= [];
 					filters.excludeFolders.push(filterValue);
 					break;
 				case "exclude-tag": {
-					if (!filters.excludeTags) {
-						filters.excludeTags = [];
-					}
+					filters.excludeTags ??= [];
 					// Remove # prefix if present
 					const excludeTagName = filterValue.startsWith("#")
 						? filterValue.substring(1)
@@ -305,9 +302,7 @@ export class FieldSuggestionParser {
 					break;
 				}
 				case "exclude-file":
-					if (!filters.excludeFiles) {
-						filters.excludeFiles = [];
-					}
+					filters.excludeFiles ??= [];
 					filters.excludeFiles.push(filterValue);
 					break;
 			}
@@ -327,6 +322,7 @@ export class FieldSuggestionParser {
 			filters,
 			...(multiSelect ? { multiSelect } : {}),
 			...(multiFormat !== "auto" ? { multiFormat } : {}),
+			...(label ? { label } : {}),
 		};
 	}
 }

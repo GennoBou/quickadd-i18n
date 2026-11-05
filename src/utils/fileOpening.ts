@@ -1,5 +1,5 @@
 import type { App, WorkspaceLeaf, WorkspaceParent } from "obsidian";
-import { FileView, normalizePath, TFile } from "obsidian";
+import { FileView, normalizePath, TFile, View } from "obsidian";
 import type {
 	OpenLocation as FileOpenLocation,
 	OpenFileOptions as FileOpenOptions,
@@ -59,6 +59,14 @@ export function getOpenFileOriginLeaf(app: App): WorkspaceLeaf | null {
 	// `getMostRecentLeaf()` already returns the active main-area leaf, superseding
 	// the deprecated `workspace.activeLeaf` that used to be the final fallback.
 	return rootLeaf ?? workspace.getMostRecentLeaf?.() ?? null;
+}
+
+/**
+ * The focused leaf, which can be in a sidebar: what `workspace.activeLeaf`
+ * holds, read through the API Obsidian recommends instead of that field.
+ */
+function getFocusedLeaf(app: App): WorkspaceLeaf | null {
+	return app.workspace.getActiveViewOfType(View)?.leaf ?? null;
 }
 
 function getRootLeaves(app: App): WorkspaceLeaf[] {
@@ -200,6 +208,7 @@ export async function openFile(
 	}
 
 	const openOriginLeaf = originLeaf ?? getOpenFileOriginLeaf(app);
+	const activeLeaf = !focus ? getFocusedLeaf(app) : null;
 	const leaf = resolveLeafForOpenFileLocation(
 		app,
 		location,
@@ -207,9 +216,16 @@ export async function openFile(
 		openOriginLeaf,
 	);
 	if (!leaf) throw new Error("Could not obtain a workspace leaf.");
+	if (activeLeaf && getFocusedLeaf(app) !== activeLeaf) {
+		app.workspace.setActiveLeaf(activeLeaf, { focus: false });
+	}
 
 	// Open the file
-	await leaf.openFile(file);
+	if (focus) {
+		await leaf.openFile(file);
+	} else {
+		await leaf.openFile(file, { active: false });
+	}
 
 	// Optionally adjust view mode (Reading / Live Preview / Source)
 	if (mode && mode !== "default" && !(typeof mode === "object" && mode.mode === "default")) {
@@ -232,7 +248,11 @@ export async function openFile(
 		}
 
 		// Fix eState usage - merge into state rather than passing as second param
-		await leaf.setViewState({ ...vs, state: { ...next, ...eState } });
+		await leaf.setViewState({
+			...vs,
+			...(!focus && { active: false }),
+			state: { ...next, ...eState },
+		});
 	}
 
 	if (focus) {
@@ -261,8 +281,10 @@ export function openExistingFileTab(
 	focus = true,
 ): WorkspaceLeaf | null {
 	let leaf: WorkspaceLeaf | undefined = undefined;
+	const focusedLeaf = getFocusedLeaf(app);
 
 	app.workspace.iterateRootLeaves((m_leaf: WorkspaceLeaf) => {
+		if (leaf && leaf === focusedLeaf) return;
 		const view = m_leaf.view;
 		if (view instanceof FileView) {
 			if (view.file) {

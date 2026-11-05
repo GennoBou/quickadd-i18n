@@ -1,16 +1,21 @@
-import type { App } from "obsidian";
+import type { App, SearchMatches } from "obsidian";
+import { rankMatches } from "./rankMatches";
 import { TextInputSuggest } from "./suggest";
-import { normalizeDisplayItem, normalizeQuery } from "./utils";
+import {
+	dispatchCompletion,
+	normalizeDisplayItem,
+	normalizeQuery,
+	renderHighlightRanges,
+} from "./utils";
 
-type CompletionInputEvent = Event & {
-	fromCompletion?: boolean;
-	keepOpen?: boolean;
-};
+const MAX_RESULTS = 200;
 
 export class SuggesterInputSuggest extends TextInputSuggest<string> {
 	private options: string[];
 	private caseSensitive: boolean;
 	private multiSelect: boolean;
+	// Match ranges of the last suggestions, for highlighting.
+	private matchesByItem = new Map<string, SearchMatches>();
 	// Fires with the exact item picked on each multi-select selection. The
 	// resulting ", "-joined input text is ambiguous when an option's label equals
 	// the join of two other option labels (e.g. "a", "b", and "a, b"); the
@@ -59,24 +64,18 @@ export class SuggesterInputSuggest extends TextInputSuggest<string> {
 	getSuggestions(query: string): string[] {
 		const safeQuery = normalizeQuery(query);
 		const { alreadySelected, activeTerm } = this.parseMultiSelectInput(safeQuery);
-		const searchQuery = this.caseSensitive ? activeTerm : activeTerm.toLowerCase();
-
 		const available = this.getRemainingOptions(alreadySelected);
 
-		if (!searchQuery) {
-			return available.slice(0, 200);
-		}
-
-		return available
-			.filter((opt) => {
-				const optStr = this.caseSensitive ? opt : opt.toLowerCase();
-				return optStr.includes(searchQuery);
-			})
-			.slice(0, 200);
+		const ranked = rankMatches(activeTerm, available, (option) => option, {
+			limit: MAX_RESULTS,
+			caseSensitive: this.caseSensitive,
+		});
+		this.matchesByItem = new Map(ranked.map(({ item, matches }) => [item, matches]));
+		return ranked.map(({ item }) => item);
 	}
 
 	renderSuggestion(item: string, el: HTMLElement): void {
-		this.renderMatch(el, item, this.getCurrentQuery());
+		renderHighlightRanges(el, item, this.matchesByItem.get(item) ?? []);
 	}
 
 	selectSuggestion(item: string): void {
@@ -89,9 +88,7 @@ export class SuggesterInputSuggest extends TextInputSuggest<string> {
 
 	private selectSingleItem(item: string): void {
 		this.inputEl.value = item;
-		const event = new Event("input", { bubbles: true });
-		(event as CompletionInputEvent).fromCompletion = true;
-		this.inputEl.dispatchEvent(event);
+		dispatchCompletion(this.inputEl);
 		this.close();
 	}
 
@@ -117,21 +114,8 @@ export class SuggesterInputSuggest extends TextInputSuggest<string> {
 			this.inputEl.value.length,
 		);
 
-		// Trigger input event
-		const event = new Event("input", { bubbles: true });
-		const completionEvent = event as CompletionInputEvent;
-		completionEvent.fromCompletion = true;
-
-		// Only keep open if there are more items to select
-		if (hasMoreItems) {
-			completionEvent.keepOpen = true;
-			this.inputEl.dispatchEvent(event);
-			// Force re-focus to trigger suggestions
-			this.inputEl.focus();
-		} else {
-			// All items selected, close the dropdown
-			this.inputEl.dispatchEvent(event);
-			this.close();
-		}
+		dispatchCompletion(this.inputEl, hasMoreItems);
+		if (hasMoreItems) this.inputEl.focus();
+		else this.close();
 	}
 }

@@ -1,47 +1,10 @@
+// @vitest-environment jsdom
 import { createChoiceExecutor } from "../../tests/helpers/createChoiceExecutor";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../quickAddSettingsTab", () => {
-	const defaultSettings = {
-		choices: [],
-		inputPrompt: "single-line",
-		devMode: false,
-		templateFolderPaths: [],
-		useSelectionAsCaptureValue: true,
-		announceUpdates: "major",
-		version: "0.0.0",
-		globalVariables: {},
-		onePageInputEnabled: false,
-		disableOnlineFeatures: true,
-		enableRibbonIcon: false,
-		showCaptureNotification: true,
-		showInputCancellationNotification: true,
-		enableTemplatePropertyTypes: false,
-		ai: {
-			defaultModel: "Ask me",
-			defaultSystemPrompt: "",
-			promptTemplatesFolderPath: "",
-			showAssistant: true,
-			providers: [],
-		},
-		migrations: {
-			migrateToMacroIDFromEmbeddedMacro: true,
-			useQuickAddTemplateFolder: false,
-			incrementFileNameSettingMoveToDefaultBehavior: false,
-			consolidateFileExistsBehavior: false,
-			mutualExclusionInsertAfterAndWriteToBottomOfFile: false,
-			setVersionAfterUpdateModalRelease: false,
-			addDefaultAIProviders: false,
-			removeMacroIndirection: false,
-			migrateFileOpeningSettings: false,
-			backfillFileOpeningDefaults: false,
-		},
-	};
-
-	return {
-		DEFAULT_SETTINGS: defaultSettings,
-		QuickAddSettingsTab: class {},
-	};
+vi.mock("../quickAddSettingsTab", async () => {
+	const { engineSettingsMock } = await import("../../tests/helpers/engines/settings");
+	return engineSettingsMock();
 });
 
 const {
@@ -79,6 +42,9 @@ vi.mock("../formatters/completeFormatter", () => {
 		async formatFileName(format: string, prompt: string) {
 			return formatFileNameMock(format, prompt);
 		}
+		async formatTemplateContent(input: string) {
+			return await this.formatFileContent(input);
+		}
 		async formatFileContent(...args: unknown[]) {
 			return await formatFileContentMock(...args);
 		}
@@ -86,6 +52,9 @@ vi.mock("../formatters/completeFormatter", () => {
 			return input;
 		}
 		async withTemplatePropertyCollection<T>(work: () => Promise<T>) {
+			return await work();
+		}
+		async withUserTextProtected<T>(work: () => Promise<T>) {
 			return await work();
 		}
 		async withPromptScope<T>(
@@ -113,11 +82,17 @@ vi.mock("../utils/fileLinks", () => ({
 	getAppendLinkDestinationFile: getAppendLinkDestinationFileMock,
 }));
 
-vi.mock("../utilityObsidian", () => ({
+vi.mock("../utils/templaterIntegration", () => ({
 	getTemplater: vi.fn(() => ({})),
 	overwriteTemplaterOnce: vi.fn(),
+}));
+vi.mock("../utils/vaultQueries", () => ({
 	getAllFolderPathsInVault: vi.fn(() => []),
-	insertFileLinkToActiveView: vi.fn(),
+}));
+vi.mock("../utils/editorInsertion", () => ({
+	insertFileLinkToCurrentNote: vi.fn(),
+}));
+vi.mock("../utils/fileOpening", () => ({
 	openExistingFileTab: vi.fn(() => null),
 	openFile: vi.fn(),
 }));
@@ -132,10 +107,6 @@ vi.mock("../main", () => ({
 	default: class QuickAddMock {},
 }));
 
-vi.mock("obsidian-dataview", () => ({
-	getAPI: vi.fn(),
-}));
-
 import { TFile, TFolder, type App } from "obsidian";
 import { Notice } from "obsidian";
 import { TemplateChoiceEngine } from "./TemplateChoiceEngine";
@@ -145,7 +116,7 @@ import { MacroAbortError } from "../errors/MacroAbortError";
 import { UserCancelError } from "../errors/UserCancelError";
 import { settingsStore } from "../settingsStore";
 import { InputPromptDraftStore } from "../utils/InputPromptDraftStore";
-import { insertFileLinkToActiveView } from "../utilityObsidian";
+import { insertFileLinkToCurrentNote } from "../utils/editorInsertion";
 
 const defaultSettingsState = structuredClone(settingsStore.getState());
 
@@ -254,7 +225,7 @@ describe("TemplateChoiceEngine cancellation notices", () => {
 		copyFileLinkToClipboardMock.mockResolvedValue(true);
 		getAppendLinkDestinationFileMock.mockReset();
 		getAppendLinkDestinationFileMock.mockReturnValue(null);
-		vi.mocked(insertFileLinkToActiveView).mockReset();
+		vi.mocked(insertFileLinkToCurrentNote).mockReset();
 		formatFileNameMock.mockReset();
 		formatFileContentMock.mockReset();
 		formatFileContentMock.mockResolvedValue("");
@@ -338,11 +309,11 @@ describe("TemplateChoiceEngine cancellation notices", () => {
 		const { engine } = createEngine("ignored");
 		formatFileNameMock.mockRejectedValueOnce(new Error("Disk full"));
 
-		store.beginExecutionScope();
+		const draftScope = store.beginExecutionScope();
 		store.handleSubmittedDraft(draftKey, "Submitted template name");
 
 		await engine.run();
-		store.commitExecutionScope();
+		store.commitExecutionScope(draftScope);
 
 		expect(store.get(draftKey)).toBe("Submitted template name");
 	});
@@ -363,11 +334,11 @@ describe("TemplateChoiceEngine cancellation notices", () => {
 			true,
 		);
 
-		store.beginExecutionScope();
+		const draftScope = store.beginExecutionScope();
 		store.handleSubmittedDraft(draftKey, "Submitted template name");
 
 		await engine.run();
-		store.commitExecutionScope();
+		store.commitExecutionScope(draftScope);
 
 		expect(store.get(draftKey)).toBe("Submitted template name");
 	});
@@ -405,11 +376,11 @@ describe("TemplateChoiceEngine cancellation notices", () => {
 			"overwriteFileWithTemplate",
 		).mockResolvedValue(null);
 
-		store.beginExecutionScope();
+		const draftScope = store.beginExecutionScope();
 		store.handleSubmittedDraft(draftKey, "Submitted template name");
 
 		await engine.run();
-		store.commitExecutionScope();
+		store.commitExecutionScope(draftScope);
 
 		expect(store.get(draftKey)).toBe("Submitted template name");
 	});
@@ -430,11 +401,11 @@ describe("TemplateChoiceEngine cancellation notices", () => {
 			}
 		).createFileWithTemplate = vi.fn().mockResolvedValue(null);
 
-		store.beginExecutionScope();
+		const draftScope = store.beginExecutionScope();
 		store.handleSubmittedDraft(draftKey, "Submitted template name");
 
 		await engine.run();
-		store.commitExecutionScope();
+		store.commitExecutionScope(draftScope);
 
 		expect(store.get(draftKey)).toBe("Submitted template name");
 	});
@@ -499,6 +470,7 @@ describe("TemplateChoiceEngine cancellation notices", () => {
 					destination: { type: "specifiedFile", path: "Indexes/MOC.md" },
 					linkType: "link",
 				}),
+				undefined,
 			);
 		});
 
@@ -652,11 +624,11 @@ describe("TemplateChoiceEngine cancellation notices", () => {
 			}
 		).createFileWithTemplate = vi.fn().mockResolvedValue(createdFile);
 
-		store.beginExecutionScope();
+		const draftScope = store.beginExecutionScope();
 		store.handleSubmittedDraft(draftKey, "Submitted template name");
 
 		await engine.run();
-		store.commitExecutionScope();
+		store.commitExecutionScope(draftScope);
 
 		expect(copyFileLinkToClipboardMock).toHaveBeenCalledWith(createdFile);
 		expect(choiceExecutor.recordExecutionResult).toHaveBeenCalledWith({
@@ -691,19 +663,22 @@ describe("TemplateChoiceEngine cancellation notices", () => {
 				createFileWithTemplate: () => Promise<TFile | null>;
 			}
 		).createFileWithTemplate = vi.fn().mockResolvedValue(createdFile);
-		vi.mocked(insertFileLinkToActiveView).mockRejectedValueOnce(
+		vi.mocked(insertFileLinkToCurrentNote).mockRejectedValueOnce(
 			new Error("frontmatter property is missing"),
 		);
 
 		await engine.run();
 
-		expect(insertFileLinkToActiveView).toHaveBeenCalledWith(
+		expect(insertFileLinkToCurrentNote).toHaveBeenCalledWith(
 			app,
 			createdFile,
+			null,
 			expect.objectContaining({
 				...(engine.choice.appendLink as object),
 				destination: { type: "activeFile" },
 			}),
+			undefined,
+			false,
 		);
 		expect(choiceExecutor.recordExecutionResult).toHaveBeenCalledWith({
 			status: "success",

@@ -7,6 +7,7 @@
 		moveById,
 		type PlaceholderRecovery,
 		type Reorderable,
+		showDragPillOnStart,
 		stripShadow,
 	} from "../shared/dndReorder";
 	import { createDragArming } from "../shared/dragArming.svelte";
@@ -43,9 +44,11 @@
 	const items = $derived(preview ?? toItems(folders));
 
 	let placeholderRecovery: PlaceholderRecovery<FolderDragItem> | null = null;
+	const folderLabel = (item: FolderDragItem) => item.id;
 
 	function handleConsider(e: CustomEvent<DndEvent<FolderDragItem>>) {
 		drag.markStarted();
+		showDragPillOnStart(e, folderLabel);
 		const reported = e.detail.items;
 		placeholderRecovery =
 			capturePlaceholderRecovery(reported, e.detail.info.id) ?? placeholderRecovery;
@@ -103,7 +106,7 @@
 		items,
 		dragDisabled,
 		type: zoneType,
-		resolveLabel: (item) => item.id,
+		resolveLabel: folderLabel,
 	})}
 	onconsider={handleConsider}
 	onfinalize={handleFinalize}

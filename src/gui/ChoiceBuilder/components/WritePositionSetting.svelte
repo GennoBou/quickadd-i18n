@@ -9,6 +9,7 @@ import Dropdown from "../../components/Dropdown.svelte";
 import InsertAfterFields from "./InsertAfterFields.svelte";
 import InsertBeforeFields from "./InsertBeforeFields.svelte";
 import PropertyCaptureFields from "./PropertyCaptureFields.svelte";
+import { getWritePosition } from "../../../engine/captureAction";
 import { t } from "src/i18n";
 
 /**
@@ -29,22 +30,7 @@ let {
 
 const isActiveFile = $derived(!!choice.captureToActiveFile);
 
-const current = $derived.by(() => {
-	if (choice.propertyCapture) return "property";
-	if (choice.insertAfter?.enabled) return "after";
-	if (choice.insertBefore?.enabled) return "before";
-	if (choice.newLineCapture?.enabled)
-		return choice.newLineCapture.direction === "above"
-			? "newLineAbove"
-			: "newLineBelow";
-	if (isActiveFile) {
-		if (choice.activeFileWritePosition === "top") return "activeTop";
-		if (choice.activeFileWritePosition === "bottom" || choice.prepend)
-			return "bottom";
-		return "top";
-	}
-	return choice.prepend ? "bottom" : "top";
-});
+const current = $derived(getWritePosition(choice));
 
 const options = $derived([
 	{ value: "top", label: isActiveFile ? t("At cursor") : t("Top of file") },
@@ -67,6 +53,7 @@ function onWritePositionChange(value: string) {
 			property: { kind: "named", format: "" },
 			action: "set",
 			createIfMissing: true,
+			sort: "none",
 		};
 		return;
 	}

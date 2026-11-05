@@ -1,3 +1,4 @@
+import { createSelectionFormatterPlugin } from "../../tests/helpers/formatters/plugin";
 import { createChoiceExecutor } from "../../tests/helpers/createChoiceExecutor";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { App } from "obsidian";
@@ -13,7 +14,6 @@ vi.mock("../gui/InputPrompt", () => ({
 		factory() {
 			return {
 				Prompt: promptMock,
-				PromptWithContext: promptMock,
 			} as any;
 		}
 	},
@@ -26,11 +26,6 @@ vi.mock("../quickAddSettingsTab", () => ({
 vi.mock("../main", () => ({
 	__esModule: true,
 	default: class QuickAddMock {},
-}));
-
-vi.mock("obsidian-dataview", () => ({
-	__esModule: true,
-	getAPI: vi.fn().mockReturnValue(null),
 }));
 
 const createFormatter = (
@@ -52,14 +47,7 @@ const createFormatter = (
 		},
 	} as unknown as App;
 
-	const plugin = {
-		settings: {
-			inputPrompt: "single-line",
-			enableTemplatePropertyTypes: false,
-			globalVariables: {},
-			useSelectionAsCaptureValue: true,
-		},
-	} as any;
+	const plugin = createSelectionFormatterPlugin();
 
 	const choiceExecutor = variables
 		? ({ ...createChoiceExecutor(), execute: vi.fn(), variables } as any)

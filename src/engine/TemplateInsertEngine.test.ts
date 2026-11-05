@@ -26,6 +26,9 @@ vi.mock("../formatters/completeFormatter", () => {
 				.replace(/{{FOLDER\|name}}/gi, leaf)
 				.replace(/{{FOLDER}}/gi, full);
 		}
+		async formatTemplateContent(input: string) {
+			return await this.formatFileContent(input);
+		}
 		async formatFileContent(input: string) {
 			return input;
 		}
@@ -39,6 +42,9 @@ vi.mock("../formatters/completeFormatter", () => {
 			return input;
 		}
 		async withTemplatePropertyCollection<T>(work: () => Promise<T>) {
+			return await work();
+		}
+		async withUserTextProtected<T>(work: () => Promise<T>) {
 			return await work();
 		}
 		async withPromptScope<T>(
@@ -58,23 +64,17 @@ vi.mock("../formatters/completeFormatter", () => {
 	return { CompleteFormatter: CompleteFormatterMock };
 });
 
-vi.mock("obsidian-dataview", () => ({
-	getAPI: vi.fn(),
-}));
-
-vi.mock("../utilityObsidian", async (importOriginal) => {
-	const actual = await importOriginal<object>();
-	return {
-		...actual,
-		getTemplater: vi.fn(() => ({})),
-		overwriteTemplaterOnce: vi.fn(),
-		templaterParseTemplate: vi.fn(
+vi.mock("../utils/templaterIntegration", async (importOriginal) => ({
+	...(await importOriginal<object>()),
+	getTemplater: vi.fn(() => ({})),
+	overwriteTemplaterOnce: vi.fn(),
+	templaterParseTemplate: vi.fn(
 			async (_app: unknown, content: string) => content,
 		),
-	};
-});
+}));
 
-import { TFile, TFolder, type App } from "obsidian";
+import { templaterParseTemplate } from "../utils/templaterIntegration";
+import { TFile, TFolder, MarkdownView, type App } from "obsidian";
 import type QuickAdd from "../main";
 import type ITemplateChoice from "../types/choices/ITemplateChoice";
 import {
@@ -149,7 +149,7 @@ function makeHarness(options: {
 	const modify = vi.fn();
 	const frontmatter = options.frontmatter ?? {};
 	const replaceSelection = vi.fn();
-	let activeViewFile: TFile | null = null;
+	const view = { file: null as TFile | null, editor: { replaceSelection } };
 
 	const rootFolders = new Map(
 		(options.rootFolders ?? []).map((path) => {
@@ -197,10 +197,8 @@ function makeHarness(options: {
 			}),
 		},
 		workspace: {
-			getActiveViewOfType: () =>
-				activeViewFile
-					? { file: activeViewFile, editor: { replaceSelection } }
-					: null,
+			getActiveViewOfType: () => view.file ? view : null,
+			getLeavesOfType: () => view.file ? [{ view }] : [],
 		},
 	} as unknown as App;
 
@@ -210,7 +208,7 @@ function makeHarness(options: {
 		frontmatter,
 		replaceSelection,
 		setActiveViewFile: (file) => {
-			activeViewFile = file;
+			view.file = file;
 		},
 	};
 }
@@ -271,30 +269,45 @@ describe("splitTemplateFrontmatter", () => {
 });
 
 describe("insertBodyIntoNoteContent", () => {
-	it("appends to the bottom", () => {
-		expect(insertBodyIntoNoteContent("existing", "new", "bottom")).toBe(
-			"existing\nnew",
+	it.each([
+		["a final line break", "# E\n- old\n", "# E\n- old\n\n- tpl V\n"],
+		["no final line break", "# E\n- old", "# E\n- old\n\n- tpl V\n"],
+		["a trailing blank line", "# E\n- old\n\n", "# E\n- old\n\n- tpl V\n"],
+		["blank lines with spaces", "# E\n- old\n  \n\t\n", "# E\n- old\n\n- tpl V\n"],
+		["CRLF line breaks", "# E\r\n- old\r\n\r\n", "# E\r\n- old\n\n- tpl V\n"],
+	])("appends to the bottom after exactly one blank line, for a note ending with %s (#1958)", (_, note, expected) => {
+		expect(insertBodyIntoNoteContent(note, "- tpl V\n", "bottom").content).toBe(expected);
+	});
+
+	it("adds no blank line above the template in an empty note (#1958)", () => {
+		expect(insertBodyIntoNoteContent("", "- tpl V\n", "bottom").content).toBe("- tpl V\n");
+		expect(insertBodyIntoNoteContent("\n\n", "- tpl V\n", "bottom").content).toBe("- tpl V\n");
+	});
+
+	it("keeps the last line's own trailing spaces at the bottom", () => {
+		expect(insertBodyIntoNoteContent("- old  \n", "new", "bottom").content).toBe(
+			"- old  \n\nnew",
 		);
 	});
 
 	it("inserts at the top when the note has no frontmatter", () => {
-		expect(insertBodyIntoNoteContent("existing", "new", "top")).toBe(
+		expect(insertBodyIntoNoteContent("existing", "new", "top").content).toBe(
 			"new\nexisting",
 		);
 	});
 
 	it("inserts below the note's frontmatter for top", () => {
 		const note = "---\ntitle: Note\n---\nexisting";
-		expect(insertBodyIntoNoteContent(note, "new", "top")).toBe(
+		expect(insertBodyIntoNoteContent(note, "new", "top").content).toBe(
 			"---\ntitle: Note\n---\nnew\nexisting",
 		);
 	});
 
 	it("does not glue onto the fence for a frontmatter-only note with no trailing newline (#526 regression)", () => {
-		expect(insertBodyIntoNoteContent("---\ntitle: Note\n---", "new", "top")).toBe(
+		expect(insertBodyIntoNoteContent("---\ntitle: Note\n---", "new", "top").content).toBe(
 			"---\ntitle: Note\n---\nnew\n",
 		);
-		expect(insertBodyIntoNoteContent("---\n---", "new", "top")).toBe(
+		expect(insertBodyIntoNoteContent("---\n---", "new", "top").content).toBe(
 			"---\n---\nnew\n",
 		);
 	});
@@ -302,30 +315,30 @@ describe("insertBodyIntoNoteContent", () => {
 	it("ends the inserted block on its own line, with a blank-line separation when the body already ends in a newline", () => {
 		// A single-line body (no trailing newline) lands tight against the next line...
 		expect(
-			insertBodyIntoNoteContent("---\nt: 1\n---\nExisting body", "## Block\nLine", "top"),
+			insertBodyIntoNoteContent("---\nt: 1\n---\nExisting body", "## Block\nLine", "top").content,
 		).toBe("---\nt: 1\n---\n## Block\nLine\nExisting body");
 		// ...but a body that already ends in a newline keeps a blank-line separation.
-		expect(insertBodyIntoNoteContent("Existing", "Block\n", "top")).toBe(
+		expect(insertBodyIntoNoteContent("Existing", "Block\n", "top").content).toBe(
 			"Block\n\nExisting",
 		);
 	});
 
 	it("preserves CRLF frontmatter when inserting at top", () => {
 		expect(
-			insertBodyIntoNoteContent("---\r\nt: 1\r\n---\r\nBody", "new", "top"),
+			insertBodyIntoNoteContent("---\r\nt: 1\r\n---\r\nBody", "new", "top").content,
 		).toBe("---\r\nt: 1\r\n---\r\nnew\nBody");
 	});
 
 	it("keeps the blank line separating the note's frontmatter from its body (issue #1538)", () => {
 		// Symmetric with the no-separator note above: the block lands tight against
 		// the following line, and the note's separator line stays where it was.
-		expect(insertBodyIntoNoteContent("---\na: 1\n---\n\nBody\n", "TPL", "top")).toBe(
+		expect(insertBodyIntoNoteContent("---\na: 1\n---\n\nBody\n", "TPL", "top").content).toBe(
 			"---\na: 1\n---\n\nTPL\nBody\n",
 		);
 		// A body that already ends in a newline still gets exactly ONE blank line of
 		// separation below it (it used to get two, by stacking onto the separator).
 		expect(
-			insertBodyIntoNoteContent("---\na: 1\n---\n\nBody\n", "TPL\n", "top"),
+			insertBodyIntoNoteContent("---\na: 1\n---\n\nBody\n", "TPL\n", "top").content,
 		).toBe("---\na: 1\n---\n\nTPL\n\nBody\n");
 	});
 
@@ -334,7 +347,7 @@ describe("insertBodyIntoNoteContent", () => {
 		// the shape every "---\nfm\n---\n\nContent" template produces.
 		const { body } = splitTemplateFrontmatter("---\nt: x\n---\n\nContent");
 		expect(body).toBe("\nContent");
-		expect(insertBodyIntoNoteContent("---\na: 1\n---\n\nExisting", body, "top")).toBe(
+		expect(insertBodyIntoNoteContent("---\na: 1\n---\n\nExisting", body, "top").content).toBe(
 			"---\na: 1\n---\n\nContent\n\nExisting",
 		);
 	});
@@ -365,8 +378,20 @@ describe("TemplateInsertEngine.apply", () => {
 
 		expect(harness.modify).toHaveBeenCalledWith(
 			file,
-			"EXISTING\nTEMPLATE_CONTENT",
+			"EXISTING\n\nTEMPLATE_CONTENT",
 		);
+	});
+
+	it("bottom: drops the template's leading blank lines, such as the one after its frontmatter (#1958)", async () => {
+		const harness = makeHarness({
+			templateContent: "---\nstatus: draft\n---\n\n\nTEMPLATE_CONTENT",
+			noteContent: "EXISTING\n",
+		});
+		const file = makeFile();
+
+		await makeEngine(harness, file, "bottom").apply();
+
+		expect(harness.modify).toHaveBeenCalledWith(file, "EXISTING\n\nTEMPLATE_CONTENT");
 	});
 
 	it("top: inserts body below note frontmatter and keeps existing scalar values", async () => {
@@ -456,6 +481,66 @@ describe("TemplateInsertEngine.apply", () => {
 		expect(result).toBe(file);
 		expect(harness.replaceSelection).toHaveBeenCalledWith("TEMPLATE_CONTENT");
 		expect(harness.modify).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ marked: false, sameFile: false },
+		{ marked: true, sameFile: false },
+		{ marked: false, sameFile: true },
+		{ marked: true, sameFile: true },
+	])("cursor: keeps original editor (marked: $marked, same file: $sameFile)", async ({ marked, sameFile }) => {
+		const harness = makeHarness({ templateContent: marked ? "new{{CURSOR}} text" : "new text", noteContent: "old" });
+		const file = makeFile();
+		harness.setActiveViewFile(file);
+		const original = harness.app.workspace.getActiveViewOfType(MarkdownView)!;
+		let value = "old";
+		Object.assign(original.editor, {
+			getCursor: () => ({ line: 0, ch: 0 }),
+			listSelections: () => [{ anchor: { line: 0, ch: 0 }, head: { line: 0, ch: 0 } }],
+			posToOffset: ({ ch }: { ch: number }) => ch,
+			offsetToPos: (ch: number) => ({ line: 0, ch }),
+			getValue: () => value,
+			transaction: vi.fn(({ changes }: { changes: { text: string }[] }) => { value = changes[0].text + value; }),
+			setSelections: vi.fn(),
+		});
+		const other = {
+			file: sameFile ? file : makeFile({ path: "other.md" }),
+			getMode: () => "source",
+			editor: {
+				replaceSelection: vi.fn(),
+				setCursor: vi.fn(),
+				getValue: () => value,
+				offsetToPos: (ch: number) => ({ line: 0, ch }),
+			},
+		};
+		vi.mocked(templaterParseTemplate).mockImplementationOnce(async (_app, content) => {
+			vi.spyOn(harness.app.workspace, "getActiveViewOfType").mockReturnValue(other as unknown as MarkdownView);
+			return content;
+		});
+		const engine = makeEngine(harness, file, "cursor");
+		await engine.apply();
+		engine.placeCursor(file);
+		if (marked) expect(value).toBe("new textold");
+		else expect(harness.replaceSelection).toHaveBeenCalledWith("new text");
+		expect(other.editor.replaceSelection).not.toHaveBeenCalled();
+		expect(other.editor.setCursor).not.toHaveBeenCalled();
+	});
+
+	it.each(["detached", "reused", "replaced editor"])("cursor: aborts before body and YAML writes when the original editor is %s", async (change) => {
+		const harness = makeHarness({ templateContent: "---\nadded: yes\n---\nnew{{CURSOR}} text", noteContent: "old" });
+		const file = makeFile();
+		harness.setActiveViewFile(file);
+		const view = harness.app.workspace.getActiveViewOfType(MarkdownView)!;
+		vi.mocked(templaterParseTemplate).mockImplementationOnce(async (_app, content) => {
+			if (change === "detached") vi.spyOn(harness.app.workspace, "getLeavesOfType").mockReturnValue([]);
+			else if (change === "reused") view.file = makeFile({ path: "other.md" });
+			else view.editor = { replaceSelection: vi.fn() } as unknown as MarkdownView["editor"];
+			return content;
+		});
+		await expect(makeEngine(harness, file, "cursor").apply()).rejects.toThrow("original editor was closed or changed notes");
+		expect(harness.replaceSelection).not.toHaveBeenCalled();
+		expect(harness.modify).not.toHaveBeenCalled();
+		expect(harness.frontmatter).toEqual({});
 	});
 
 	it("cursor: skips whitespace-only body from frontmatter-only templates", async () => {

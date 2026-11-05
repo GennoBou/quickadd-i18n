@@ -1,5 +1,6 @@
 import type { App } from "obsidian";
 import { Notice, TFile } from "obsidian";
+import { processNote } from "./noteContent";
 import { log } from "../logger/logManager";
 import type {
 	AppendLinkDestination,
@@ -8,6 +9,7 @@ import type {
 	LinkType,
 } from "../types/linkPlacement";
 import { placementSupportsEmbed } from "../types/linkPlacement";
+import type { EditorTextMutation, EditorTextMutationObserver } from "./editorCursorPlacement";
 
 const CLIPBOARD_NOTICE_DURATION_MS = 4000;
 
@@ -24,7 +26,7 @@ type FileLinkTextOptions = {
 	alias?: string;
 };
 
-function usesMarkdownLinks(app: App): boolean {
+export function usesMarkdownLinks(app: App): boolean {
 	// vault.getConfig is the de-facto (untyped) plugin API for editor settings.
 	// Inferring the mode from a generated link's shape instead would misdetect
 	// markdown-link vaults whose note basename starts with "[".
@@ -144,6 +146,7 @@ export async function appendFileLinkToDestinationFile(
 	app: App,
 	file: TFile,
 	linkOptions: AppendLinkOptions,
+	onEditorTextMutation?: EditorTextMutationObserver,
 ): Promise<boolean> {
 	const destination = linkOptions.destination;
 	if (destination?.type !== "specifiedFile") return false;
@@ -155,13 +158,30 @@ export async function appendFileLinkToDestinationFile(
 		);
 	}
 
-	const linkText = buildFileLinkText(app, file, {
+	await appendLinkLineToNote(app, targetFile, buildFileLinkText(app, file, {
 		sourcePath: targetFile.path,
 		linkType: "link",
-	});
-
-	await app.vault.process(targetFile, (content) => appendLine(content, linkText));
+	}), onEditorTextMutation);
 	return true;
+}
+
+/** Appends `linkText` as the last line of `targetFile`. */
+export async function appendLinkLineToNote(
+	app: App,
+	targetFile: TFile,
+	linkText: string,
+	onEditorTextMutation?: EditorTextMutationObserver,
+): Promise<void> {
+	let mutation: EditorTextMutation | undefined;
+	await processNote(app, targetFile, (before) => {
+		const after = appendLine(before, linkText);
+		mutation = {
+			filePath: targetFile.path, before, after,
+			edits: [{ from: before.length, to: before.length, text: after.slice(before.length) }],
+		};
+		return after;
+	});
+	if (mutation) onEditorTextMutation?.(mutation);
 }
 
 export async function writeTextToClipboard(text: string): Promise<boolean> {

@@ -1,5 +1,7 @@
 import {
 	CLIPBOARD_SYNTAX_SUGGEST_REGEX,
+	CURSOR_SYNTAX_SUGGEST_REGEX,
+	DAILY_SYNTAX_SUGGEST_REGEX,
 	DATE_FORMAT_SYNTAX_SUGGEST_REGEX,
 	DATE_SYNTAX_SUGGEST_REGEX,
 	FIELD_SYNTAX_SUGGEST_REGEX,
@@ -12,7 +14,10 @@ import {
 	LINKSECTION_SYNTAX_SUGGEST_REGEX,
 	MACRO_SYNTAX_SUGGEST_REGEX,
 	MATH_VALUE_SYNTAX_SUGGEST_REGEX,
+	MONTHLY_SYNTAX_SUGGEST_REGEX,
 	NAME_SYNTAX_SUGGEST_REGEX,
+	PROPERTY_SYNTAX_SUGGEST_REGEX,
+	QUARTERLY_SYNTAX_SUGGEST_REGEX,
 	RANDOM_SYNTAX_SUGGEST_REGEX,
 	SELECTED_SYNTAX_SUGGEST_REGEX,
 	TEMPLATE_SYNTAX_SUGGEST_REGEX,
@@ -22,6 +27,8 @@ import {
 	VALUE_SYNTAX_SUGGEST_REGEX,
 	VARIABLE_DATE_SYNTAX_SUGGEST_REGEX,
 	VARIABLE_SYNTAX_SUGGEST_REGEX,
+	WEEKLY_SYNTAX_SUGGEST_REGEX,
+	YEARLY_SYNTAX_SUGGEST_REGEX,
 } from "../../constants";
 
 /**
@@ -35,6 +42,8 @@ import {
 export type FormatSuggestContext =
 	/** Note bodies: capture format, template content, AI prompts, script inputs. `formatFileContent`. */
 	| "noteContent"
+	/** Capture property value. `formatPropertyValue`. */
+	| "propertyValue"
 	/** Capture "Capture to". `formatFileName`, but the note is not created *into* a target folder. */
 	| "captureTarget"
 	/** Template "File name format". `formatFileName` with a configured target folder. */
@@ -44,6 +53,7 @@ export type FormatSuggestContext =
 
 export const ALL_FORMAT_SUGGEST_CONTEXTS: readonly FormatSuggestContext[] = [
 	"noteContent",
+	"propertyValue",
 	"captureTarget",
 	"fileName",
 	"lineTarget",
@@ -74,7 +84,7 @@ export interface FormatTokenSuggestion {
 	isFragment?: boolean;
 }
 
-export interface FormatTokenEntry {
+interface FormatTokenEntry {
 	/** Prefix matcher deciding whether this row is still a candidate. */
 	regex: RegExp;
 	/** The row shown for the token itself. */
@@ -90,7 +100,7 @@ export interface FormatTokenEntry {
 }
 
 /** Vault/settings data the dynamic rows are built from. */
-export interface FormatTokenExpansionData {
+interface FormatTokenExpansionData {
 	templatePaths: readonly string[];
 	macroNames: readonly string[];
 	globalVariableNames: readonly string[];
@@ -129,7 +139,7 @@ function token(
  * behaviour change; previously the list mixed "{{date}}" with "{{DATE:}}" and
  * left users guessing whether the difference meant anything (#1542).
  */
-export const FORMAT_TOKEN_ENTRIES: readonly FormatTokenEntry[] = [
+const FORMAT_TOKEN_ENTRIES: readonly FormatTokenEntry[] = [
 	// == Ask for input ==
 	{
 		regex: VALUE_SYNTAX_SUGGEST_REGEX,
@@ -204,6 +214,20 @@ export const FORMAT_TOKEN_ENTRIES: readonly FormatTokenEntry[] = [
 		),
 	},
 	{
+		regex: PROPERTY_SYNTAX_SUGGEST_REGEX,
+		// Resolves only in property Capture formats (hard error elsewhere).
+		contexts: ["noteContent", "propertyValue"],
+		suggestion: token(
+			"{{PROPERTY}}",
+			"Inserts the property's current value (property Captures only)",
+		),
+	},
+	{
+		regex: CURSOR_SYNTAX_SUGGEST_REGEX,
+		contexts: ["noteContent"],
+		suggestion: token("{{CURSOR}}", "Places the cursor here (Capture and Template bodies)"),
+	},
+	{
 		regex: FILE_SYNTAX_SUGGEST_REGEX,
 		contexts: ALL,
 		suggestion: token("{{FILE:}}", "Picks a note from a folder"),
@@ -218,6 +242,7 @@ export const FORMAT_TOKEN_ENTRIES: readonly FormatTokenEntry[] = [
 				rows.push(
 					token("{{FILE:<folder>|link}}", "Same, but inserts a link to the note"),
 					token("{{FILE:<folder>|path}}", "Same, but inserts its full path"),
+					token("{{FILE:<folder>|type:image|link}}", "Same, but links an image instead of a note"),
 					token("{{FILE:<folder>|optional}}", "Same, but skippable"),
 				);
 			}
@@ -280,30 +305,81 @@ export const FORMAT_TOKEN_ENTRIES: readonly FormatTokenEntry[] = [
 			token("{{TIME:A|case:lower}}", "Lowercases formatted text, such as AM to am"),
 		],
 	},
+	{
+		regex: DAILY_SYNTAX_SUGGEST_REGEX,
+		contexts: ALL,
+		suggestion: token("{{DAILY}}", "The daily note's path, from your Daily notes settings"),
+	},
+	{
+		regex: DAILY_SYNTAX_SUGGEST_REGEX,
+		// A link is content; in a path it would name a file "[[...]]".
+		contexts: ["noteContent", "propertyValue", "lineTarget"],
+		suggestion: token("{{DAILY|link}}", "A link to the daily note"),
+	},
+	{
+		regex: WEEKLY_SYNTAX_SUGGEST_REGEX,
+		contexts: ALL,
+		suggestion: token("{{WEEKLY}}", "This week's note, from your Periodic Notes settings"),
+	},
+	{
+		regex: WEEKLY_SYNTAX_SUGGEST_REGEX,
+		contexts: ["noteContent", "propertyValue", "lineTarget"],
+		suggestion: token("{{WEEKLY|link}}", "A link to this week's note"),
+	},
+	{
+		regex: MONTHLY_SYNTAX_SUGGEST_REGEX,
+		contexts: ALL,
+		suggestion: token("{{MONTHLY}}", "This month's note, from your Periodic Notes settings"),
+	},
+	{
+		regex: MONTHLY_SYNTAX_SUGGEST_REGEX,
+		contexts: ["noteContent", "propertyValue", "lineTarget"],
+		suggestion: token("{{MONTHLY|link}}", "A link to this month's note"),
+	},
+	{
+		regex: QUARTERLY_SYNTAX_SUGGEST_REGEX,
+		contexts: ALL,
+		suggestion: token("{{QUARTERLY}}", "This quarter's note, from your Periodic Notes settings"),
+	},
+	{
+		regex: QUARTERLY_SYNTAX_SUGGEST_REGEX,
+		contexts: ["noteContent", "propertyValue", "lineTarget"],
+		suggestion: token("{{QUARTERLY|link}}", "A link to this quarter's note"),
+	},
+	{
+		regex: YEARLY_SYNTAX_SUGGEST_REGEX,
+		contexts: ALL,
+		suggestion: token("{{YEARLY}}", "This year's note, from your Periodic Notes settings"),
+	},
+	{
+		regex: YEARLY_SYNTAX_SUGGEST_REGEX,
+		contexts: ["noteContent", "propertyValue", "lineTarget"],
+		suggestion: token("{{YEARLY|link}}", "A link to this year's note"),
+	},
 
 	// == The note you ran QuickAdd from ==
 	{
 		regex: LINKCURRENT_SYNTAX_SUGGEST_REGEX,
 		// Left literal by formatFileName, so a capture target would be named
 		// "[[...]]", so it is offered only where a link is content.
-		contexts: ["noteContent", "lineTarget"],
+		contexts: ["noteContent", "propertyValue", "lineTarget"],
 		suggestion: token("{{LINKCURRENT}}", "A link to that note: [[That note]]"),
 	},
 	{
 		regex: LINKSECTION_SYNTAX_SUGGEST_REGEX,
-		contexts: ["noteContent", "lineTarget"],
+		contexts: ["noteContent", "propertyValue", "lineTarget"],
 		suggestion: token("{{LINKSECTION}}", "A link to the section your cursor is in"),
 	},
 	{
 		regex: FILENAMECURRENT_SYNTAX_SUGGEST_REGEX,
-		contexts: ["noteContent", "captureTarget", "fileName", "lineTarget"],
+		contexts: ["noteContent", "propertyValue", "captureTarget", "fileName", "lineTarget"],
 		suggestion: token("{{FILENAMECURRENT}}", "That note's file name"),
 	},
 	{
 		// formatLocationString deliberately leaves this literal, and an empty
 		// selector would match the first line, so it is withheld there.
 		regex: FOLDERCURRENT_SYNTAX_SUGGEST_REGEX,
-		contexts: ["noteContent", "captureTarget"],
+		contexts: ["noteContent", "propertyValue", "captureTarget"],
 		suggestion: token("{{FOLDERCURRENT}}", "That note's folder"),
 	},
 	{
@@ -324,7 +400,7 @@ export const FORMAT_TOKEN_ENTRIES: readonly FormatTokenEntry[] = [
 	{
 		// Throws in every path context: the title is derived from the path.
 		regex: TITLE_SYNTAX_SUGGEST_REGEX,
-		contexts: ["noteContent", "lineTarget"],
+		contexts: ["noteContent", "propertyValue", "lineTarget"],
 		suggestion: token("{{TITLE}}", "The new note's file name"),
 	},
 	{

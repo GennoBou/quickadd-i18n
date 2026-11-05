@@ -1,6 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("obsidian-dataview", () => ({ getAPI: vi.fn() }));
+// @vitest-environment jsdom
+import { describe, expect, it } from "vitest";
 
 import type IChoice from "src/types/choices/IChoice";
 import {

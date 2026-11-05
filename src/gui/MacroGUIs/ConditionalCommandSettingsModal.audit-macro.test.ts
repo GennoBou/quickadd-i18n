@@ -1,23 +1,20 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { App, DropdownComponent, Notice } from "obsidian";
+// @vitest-environment jsdom
+import { testApp } from "../../../tests/helpers/settings/modalApp";
+import { collectUnhandledRejections } from "../../../tests/helpers/unhandledRejections";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { DropdownComponent, Notice, TFile } from "obsidian";
 import { fireEvent } from "@testing-library/svelte";
 import { ConditionalCommand } from "../../types/macros/Conditional/ConditionalCommand";
 import { ConditionalCommandSettingsModal } from "./ConditionalCommandSettingsModal";
+import InputSuggester from "../InputSuggester/inputSuggester";
+import { promptCancelled } from "../../errors/UserCancelError";
+import { log } from "../../logger/logManager";
 
 type NoticeTestClass = typeof Notice & {
 	instances: Array<{ message: string }>;
 };
 const noticeClass = Notice as unknown as NoticeTestClass;
 
-function testApp(): App {
-	const app = new App() as App & {
-		dom: { appContainerEl: HTMLElement };
-		keymap: { pushScope: () => void; popScope: () => void };
-	};
-	app.dom = { appContainerEl: document.body };
-	app.keymap = { pushScope: vi.fn(), popScope: vi.fn() };
-	return app;
-}
 
 function getButton(
 	modal: ConditionalCommandSettingsModal,
@@ -105,5 +102,64 @@ describe("ConditionalCommandSettingsModal save validation", () => {
 
 		await expect(result).resolves.not.toBeNull();
 		expect(command.name).toContain("status");
+	});
+});
+
+/**
+ * Obsidian drops a Setting button's click promise, so pressing Escape in the script
+ * picker used to be an unhandled rejection that Obsidian's dev:errors listed as
+ * `MacroAbortError: Input cancelled by user`.
+ */
+describe("ConditionalCommandSettingsModal script picker (Browse)", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	function openModal() {
+		const app = testApp();
+		const script = new TFile();
+		script.path = "Scripts/check.js";
+		script.name = "check.js";
+		script.basename = "check";
+		script.extension = "js";
+		app.vault.getFiles = () => [script];
+
+		const command = new ConditionalCommand({
+			condition: { mode: "script", scriptPath: "Scripts/old.js" },
+		});
+		const modal = new ConditionalCommandSettingsModal(app, command);
+		return { modal, command, browse: getButton(modal, "Browse") };
+	}
+
+	it("stays quiet and keeps the script when the user dismisses the picker", async () => {
+		const suggest = vi
+			.spyOn(InputSuggester, "Suggest")
+			.mockRejectedValue(promptCancelled());
+		const logError = vi.spyOn(log, "logError").mockImplementation(() => {});
+		const { modal, browse } = openModal();
+
+		const unhandled = await collectUnhandledRejections(() => fireEvent.click(browse));
+
+		expect(suggest).toHaveBeenCalledTimes(1);
+		expect(unhandled).toEqual([]);
+		expect(logError).not.toHaveBeenCalled();
+		await fireEvent.click(getButton(modal, "Save"));
+		await expect(modal.waitForClose).resolves.toMatchObject({
+			condition: { mode: "script", scriptPath: "Scripts/old.js" },
+		});
+	});
+
+	it("reports a real failure with context instead of leaving it unhandled", async () => {
+		vi.spyOn(InputSuggester, "Suggest").mockRejectedValue(new Error("picker broke"));
+		const logError = vi.spyOn(log, "logError").mockImplementation(() => {});
+		const { browse } = openModal();
+
+		const unhandled = await collectUnhandledRejections(() => fireEvent.click(browse));
+
+		expect(unhandled).toEqual([]);
+		expect(logError).toHaveBeenCalledTimes(1);
+		expect((logError.mock.calls[0][0] as Error).message).toBe(
+			"Couldn't select that script: picker broke",
+		);
 	});
 });

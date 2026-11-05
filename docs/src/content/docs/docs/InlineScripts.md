@@ -32,9 +32,15 @@ typed.
 Good to know:
 
 - Label the block `js quickadd`, not plain `js`. A plain `js` block is inserted as an ordinary code snippet and never runs.
+- Write the code as the body of a function, not as `module.exports = ...`. That shape is for [user scripts](/docs/UserScripts/), which run from a macro.
 - The [QuickAdd API](/docs/QuickAddAPI/) is available as `this` (the same API user scripts get, where it arrives as a parameter instead).
 - To insert something, `return` it. Strings, numbers, booleans, and arrays are
   supported.
+- The script runs while QuickAdd builds the text, before anything is written.
+  In a Template choice the new note doesn't exist yet, and
+  `this.app.workspace.getActiveFile()` is still the note you had open, so
+  editing it changes that note. To fill in a property of the new note,
+  [return the value from the property itself](#set-a-property).
 
 Return values follow the same rendering contract as a typed
 [`{{VALUE:name}}`](/docs/FormatSyntax/#named-value):
@@ -50,6 +56,25 @@ Plain objects and other unsupported JavaScript values also insert nothing.
 QuickAdd does not guess how to serialize them into Markdown. Assign an object to
 `this.variables` and reference its fields explicitly, or return the exact string
 you want to insert.
+
+## Set a property on the new note {#set-a-property}
+
+A value that never changes doesn't need a script: write `type: person` straight
+into the template. Use a script when the value has to be worked out, such as
+this number that counts the notes already in `People`:
+
+````
+---
+type: person
+number: "```js quickadd return this.app.vault.getMarkdownFiles().filter(f => f.parent?.path === 'People').length + 1```"
+---
+````
+
+Put the script where the property's value goes. Keep it on one line and wrap it
+in double quotes, with single quotes inside the script, so the template's own
+frontmatter stays valid. The script runs before the new note exists, so with two
+notes in `People` the new one gets `number: "3"`. A quoted value stays text,
+even when the script returns a number.
 
 ## Execution order and `{{VALUE}}` {#execution-order-and-value}
 
@@ -77,6 +102,41 @@ return transformed;
 
 Assigning `this.variables.value` hands the result back to the surrounding
 format, so a later `{{VALUE}}` picks it up.
+
+### Property Capture variables {#property-capture-variables}
+
+In a [property Capture](/docs/Choices/CaptureChoice/#property), QuickAdd sets
+these variables before your script runs. They are reserved for that run. Do not
+also use `{{VALUE:propertyValue}}`, `{{VALUE:propertyKey}}`, or `{{VALUE:list}}`
+in the same Capture.
+
+| Variable | What it holds |
+| --- | --- |
+| `propertyValue` | The current value: text, a number, a checkbox, a list of text, or `undefined` when the property is missing |
+| `propertyKey` | The property name being written |
+| `list` | The current list items, or `[]` when the value is not a list |
+
+This script adds one to a Number property:
+
+````
+```js quickadd
+const n = Number(this.variables.propertyValue ?? 0);
+return n + 1;
+```
+````
+
+Return an array to rewrite the whole list. This script drops `old` and puts
+`fresh` first:
+
+````
+```js quickadd
+const kept = this.variables.list.filter((tag) => tag !== "old");
+return ["fresh", ...kept];
+```
+````
+
+To place the current value inside the format instead, use
+[`{{PROPERTY}}`](/docs/FormatSyntax/#property).
 
 ### Example: convert phone text to a `tel:` link {#example-convert-phone-text-to-a-tel-link}
 

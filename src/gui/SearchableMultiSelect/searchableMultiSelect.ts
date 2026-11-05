@@ -1,3 +1,4 @@
+import { setIcon } from "obsidian";
 import { t } from "../../i18n";
 
 export interface SearchableMultiSelectItem<T> {
@@ -7,9 +8,14 @@ export interface SearchableMultiSelectItem<T> {
 	label: string;
 	/** Extra text used for filtering without adding it to the visible label. */
 	searchText?: string;
+	/**
+	 * Other names the item is found by (a note's aliases). A row found only by
+	 * one shows that name over its label, as Obsidian's quick switcher does.
+	 */
+	aliases?: readonly string[];
 }
 
-export interface SearchableMultiSelectOptions<T> {
+interface SearchableMultiSelectOptions<T> {
 	items: readonly SearchableMultiSelectItem<T>[];
 	isSelected: (item: SearchableMultiSelectItem<T>) => boolean;
 	onToggle: (
@@ -25,6 +31,12 @@ interface IndexedItem<T> {
 	item: SearchableMultiSelectItem<T>;
 	index: number;
 	searchableText: string;
+	searchableAliases: string[];
+}
+
+interface MatchedItem<T> extends IndexedItem<T> {
+	/** The alias that matched, when the item's own text did not. */
+	alias?: string;
 }
 
 interface RenderedRow<T> {
@@ -57,34 +69,26 @@ export default class SearchableMultiSelect<T> {
 		containerEl: HTMLElement,
 		private readonly options: SearchableMultiSelectOptions<T>,
 	) {
-		this.rootEl = document.createElement("div");
-		this.rootEl.className = "qa-searchable-multi-select";
-
-		const searchContainer = document.createElement("div");
-		searchContainer.className =
-			"search-input-container qa-searchable-multi-select__search-container";
-		this.searchInputEl = document.createElement("input");
-		this.searchInputEl.className = "qa-searchable-multi-select__search";
-		this.searchInputEl.type = "search";
+		this.rootEl = containerEl.createDiv({ cls: "qa-searchable-multi-select" });
+		const searchContainer = this.rootEl.createDiv({
+			cls: "search-input-container qa-searchable-multi-select__search-container",
+		});
+		this.searchInputEl = searchContainer.createEl("input", {
+			cls: "qa-searchable-multi-select__search",
+			type: "search",
+			placeholder: options.searchPlaceholder ?? t("Search options..."),
+		});
 		this.searchInputEl.name = `qa-multi-select-search-${this.instanceId}`;
-		this.searchInputEl.placeholder =
-			options.searchPlaceholder ?? t("Search options...");
 		this.searchInputEl.setAttribute("aria-label", this.searchInputEl.placeholder);
 		this.searchInputEl.setAttribute("autocomplete", "off");
 		this.searchInputEl.setAttribute("spellcheck", "false");
-		searchContainer.appendChild(this.searchInputEl);
 
-		this.summaryEl = document.createElement("div");
-		this.summaryEl.className = "qa-searchable-multi-select__summary";
+		this.summaryEl = this.rootEl.createDiv({ cls: "qa-searchable-multi-select__summary" });
 		this.summaryEl.setAttribute("aria-live", "polite");
 
-		this.listEl = document.createElement("div");
-		this.listEl.className = "qa-searchable-multi-select__list";
+		this.listEl = this.rootEl.createDiv({ cls: "qa-searchable-multi-select__list" });
 		this.listEl.setAttribute("role", "group");
 		this.listEl.setAttribute("aria-label", t("Options"));
-
-		this.rootEl.append(searchContainer, this.summaryEl, this.listEl);
-		containerEl.appendChild(this.rootEl);
 
 		this.searchInputEl.addEventListener("input", () => {
 			this.query = this.searchInputEl.value;
@@ -99,14 +103,6 @@ export default class SearchableMultiSelect<T> {
 			if (event.key === "ArrowUp") {
 				event.preventDefault();
 				this.renderedRows.at(-1)?.input.focus();
-				return;
-			}
-			if (event.key === "Escape" && this.query) {
-				event.preventDefault();
-				event.stopPropagation();
-				this.query = "";
-				this.searchInputEl.value = "";
-				this.renderList();
 			}
 		});
 
@@ -120,9 +116,23 @@ export default class SearchableMultiSelect<T> {
 			searchableText: normalizeSearchText(
 				`${item.label} ${item.searchText ?? ""}`,
 			),
+			searchableAliases: (item.aliases ?? []).map(normalizeSearchText),
 		}));
 		this.searchInputEl.disabled = items.length === 0;
 		this.renderList();
+	}
+
+	/**
+	 * Clears a non-empty search and returns true, so the owning modal can spend
+	 * its first Esc on the search. Returns false when there is nothing to clear.
+	 */
+	clearSearch(): boolean {
+		if (!this.query) return false;
+		this.query = "";
+		this.searchInputEl.value = "";
+		this.renderList();
+		this.searchInputEl.focus();
+		return true;
 	}
 
 	focusSearchOnOpen(): void {
@@ -138,20 +148,29 @@ export default class SearchableMultiSelect<T> {
 		this.updateSummary();
 	}
 
-	private getMatchingItems(): IndexedItem<T>[] {
+	/** Items whose own text, or else one of whose aliases, has every query word. */
+	private getMatchingItems(): MatchedItem<T>[] {
 		const tokens = normalizeSearchText(this.query.trim())
 			.split(/\s+/)
 			.filter(Boolean);
 		if (tokens.length === 0) return this.indexedItems;
-		return this.indexedItems.filter(({ searchableText }) =>
-			tokens.every((token) => searchableText.includes(token)),
-		);
+		const hasTokens = (text: string) => tokens.every((token) => text.includes(token));
+		const matches: MatchedItem<T>[] = [];
+		for (const indexed of this.indexedItems) {
+			if (hasTokens(indexed.searchableText)) {
+				matches.push(indexed);
+				continue;
+			}
+			const at = indexed.searchableAliases.findIndex(hasTokens);
+			if (at >= 0) matches.push({ ...indexed, alias: indexed.item.aliases?.[at] });
+		}
+		return matches;
 	}
 
-	private getVisibleItems(matches: IndexedItem<T>[]): IndexedItem<T>[] {
+	private getVisibleItems(matches: MatchedItem<T>[]): MatchedItem<T>[] {
 		if (matches.length <= MAX_VISIBLE_OPTIONS) return matches;
-		const selected: IndexedItem<T>[] = [];
-		const unselected: IndexedItem<T>[] = [];
+		const selected: MatchedItem<T>[] = [];
+		const unselected: MatchedItem<T>[] = [];
 		for (const indexed of matches) {
 			(this.options.isSelected(indexed.item) ? selected : unselected).push(
 				indexed,
@@ -167,13 +186,11 @@ export default class SearchableMultiSelect<T> {
 		const visible = this.getVisibleItems(matches);
 
 		if (visible.length === 0) {
-			const empty = document.createElement("div");
-			empty.className = "qa-searchable-multi-select__empty";
+			const empty = this.listEl.createDiv({ cls: "qa-searchable-multi-select__empty" });
 			empty.setAttribute("role", "status");
 			empty.textContent = this.indexedItems.length
 				? t("No options match “{query}”", { query: this.query.trim() })
 				: (this.options.emptyText ?? t("No options available"));
-			this.listEl.appendChild(empty);
 		}
 
 		for (const indexed of visible) {
@@ -181,31 +198,32 @@ export default class SearchableMultiSelect<T> {
 		}
 
 		if (matches.length > visible.length) {
-			const limit = document.createElement("div");
-			limit.className = "qa-searchable-multi-select__limit";
+			const limit = this.listEl.createDiv({ cls: "qa-searchable-multi-select__limit" });
 			limit.setAttribute("role", "status");
 			limit.textContent = t("Showing {visible} of {total} options. Refine your search to see the rest.", { visible: visible.length, total: matches.length });
-			this.listEl.appendChild(limit);
 		}
 
 		this.updateSummary(matches.length);
 	}
 
-	private renderRow(indexed: IndexedItem<T>): void {
-		const { item, index } = indexed;
-		const row = document.createElement("label");
-		row.className = "qa-searchable-multi-select__option";
-		const input = document.createElement("input");
-		input.type = "checkbox";
+	private renderRow(indexed: MatchedItem<T>): void {
+		const { item, index, alias } = indexed;
+		const row = this.listEl.createEl("label", { cls: "qa-searchable-multi-select__option" });
+		const text = row.createSpan({ cls: "qa-searchable-multi-select__option-text" });
+		text.createSpan({ cls: "qa-searchable-multi-select__option-label", text: alias ?? item.label });
+		if (alias !== undefined) {
+			// As in the quick switcher: the alias that matched, the item beneath.
+			text.createSpan({ cls: "qa-searchable-multi-select__option-note", text: item.label });
+			const flair = row.createSpan({ cls: "qa-searchable-multi-select__option-flair" });
+			flair.setAttribute("aria-label", t("Alias"));
+			setIcon(flair, "forward");
+		}
+		const input = row.createEl("input", { type: "checkbox" });
 		input.name = `qa-multi-select-${this.instanceId}`;
 		input.id = `qa-multi-select-${this.instanceId}-${index}`;
 		input.checked = this.options.isSelected(item);
-		const label = document.createElement("span");
-		label.className = "qa-searchable-multi-select__option-label";
-		label.textContent = item.label;
 		row.htmlFor = input.id;
 		row.classList.toggle("is-selected", input.checked);
-		row.append(label, input);
 
 		input.addEventListener("change", () => {
 			this.options.onToggle(item, input.checked);
@@ -215,7 +233,6 @@ export default class SearchableMultiSelect<T> {
 			this.handleOptionKeydown(event, input);
 		});
 
-		this.listEl.appendChild(row);
 		this.renderedRows.push({ item, input });
 	}
 
@@ -267,9 +284,10 @@ export default class SearchableMultiSelect<T> {
 			).size;
 		const selectedLabel = t("{count} selected", { count: selectedCount });
 		if (!this.query.trim()) {
-			this.summaryEl.textContent = `${selectedLabel} · ${t("{count} options", { count: this.indexedItems.length })}`;
+			const count = this.indexedItems.length;
+			this.summaryEl.textContent = `${selectedLabel} · ${count === 1 ? t("1 option") : t("{count} options", { count })}`;
 			return;
 		}
-		this.summaryEl.textContent = `${selectedLabel} · ${t("{count} matches", { count: matchCount })}`;
+		this.summaryEl.textContent = `${selectedLabel} · ${matchCount === 1 ? t("1 match") : t("{count} matches", { count: matchCount })}`;
 	}
 }

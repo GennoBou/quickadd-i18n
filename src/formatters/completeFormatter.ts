@@ -1,19 +1,17 @@
+import { stripCursorMarkers } from "./helpers/capturePlacement";
+import { protectUserText, restoreUserText } from "./helpers/userText";
+import { promptForVariable, suggestForValue, suggestForValueMulti, type PromptRuntime } from "./helpers/valuePrompts";
+import { suggestForField, suggestForFile } from "./helpers/vaultPrompts";
+import { expandGlobalVariables } from "./helpers/globalVariables";
+import { unescapePipesInTokens } from "./helpers/pipeEscapes";
+import { findNextInlineScript, inlineScriptRescanFrom } from "./helpers/inlineScriptSpans";
 import type { App, TFile } from "obsidian";
 import { MarkdownView } from "obsidian";
-import GenericInputPrompt from "src/gui/GenericInputPrompt/GenericInputPrompt";
-import InputSuggester from "src/gui/InputSuggester/inputSuggester";
-import MultiSuggester from "src/gui/MultiSuggester/multiSuggester";
-import VDateInputPrompt from "src/gui/VDateInputPrompt/VDateInputPrompt";
 import type { IChoiceExecutor } from "../IChoiceExecutor";
+import type { ChoiceChain } from "../engine/choiceChain";
 import type { RunClocks } from "../types/dateOrigin";
-import {
-	GLOBAL_VAR_REGEX,
-	INLINE_JAVASCRIPT_REGEX,
-	// Replaces six inlined copies of `/\{\{title\}\}/i` in this file. The
-	// file-name PREVIEW now mirrors the same rule (#1588), so the pattern has to
-	// be one shared constant rather than a seventh copy that can drift.
-	TITLE_REGEX,
-} from "../constants";
+import { DATE_VARIABLE_REGEX, TITLE_REGEX } from "../constants";
+import { findDateVariableFormat } from "./helpers/dateTokens";
 import GenericSuggester from "../gui/GenericSuggester/genericSuggester";
 import InputPrompt from "../gui/InputPrompt";
 import { MathModal } from "../gui/MathModal";
@@ -21,27 +19,11 @@ import type QuickAdd from "../main";
 import type { IDateParser } from "../parsers/IDateParser";
 import type { InputPromptOptions } from "../types/inputPrompt";
 import { NLDParser } from "../parsers/NLDParser";
-import {
-	FieldSuggestionParser,
-	type FieldFilter,
-} from "../utils/FieldSuggestionParser";
-import { FieldSuggestionFileFilter } from "../utils/FieldSuggestionFileFilter";
-import {
-	buildFileDisplayLabels,
-	FILE_CUSTOM_PREFIX,
-	FILE_PICK_PREFIX,
-	type ParsedFileToken,
-} from "../utils/fileSyntax";
+import { type FieldFilter } from "../utils/FieldSuggestionParser";
+import { type ParsedFileToken } from "../utils/fileSyntax";
 import { normalizeNumericValue } from "../utils/valueSyntax";
-import {
-	collectFieldValuesProcessedDetailed,
-	collectFieldValuesRaw,
-	generateFieldCacheKey,
-} from "../utils/FieldValueCollector";
-import { FieldValueProcessor } from "../utils/FieldValueProcessor";
-import { resolveActiveNoteFieldDefault } from "../utils/activeNoteFieldDefault";
-import { getActiveMarkdownEditorView } from "../utils/activeMarkdownEditor";
-import { log } from "../logger/logManager";
+import { collectFieldValuesRaw, generateFieldCacheKey } from "../utils/FieldValueCollector";
+import { currentFile, currentSelection, missingCurrentNoteMessage } from "../utils/currentFile";
 import { Formatter, type PromptContext } from "./formatter";
 import {
 	buildPromptContextLine,
@@ -53,6 +35,7 @@ import {
 import {
 	buildSectionSubpath,
 	extractHeadingsFromLines,
+	sanitizeHeadingForSubpath,
 } from "./helpers/sectionLink";
 import { UserCancelError } from "../errors/UserCancelError";
 import { ChoiceAbortError } from "../errors/ChoiceAbortError";
@@ -66,6 +49,11 @@ export class CompleteFormatter extends Formatter {
 	 * never do — an embed link in a path would corrupt it (issue #1484).
 	 */
 	private contentValuePromptsAcceptImagePaste = false;
+	private preserveTemplateCursorMarkers = false;
+	/** See {@link withUserTextProtected}. */
+	private keepUserTextProtected = false;
+	/** The run this formatter formats for; its `{{MACRO:}}`s and inline scripts run inside it. */
+	public choiceChain: ChoiceChain = [];
 
 	constructor(
 		protected app: App,
@@ -80,18 +68,54 @@ export class CompleteFormatter extends Formatter {
 		}
 	}
 
+	protected userText(text: string): string {
+		return protectUserText(text);
+	}
+
+	/**
+	 * Content formatted inside `work` keeps answers and other user text marked,
+	 * for a caller that runs Templater and finds `{{CURSOR}}` markers before it
+	 * calls restoreUserText. Every other result is restored before it is returned.
+	 */
+	async withUserTextProtected<T>(work: () => Promise<T>): Promise<T> {
+		const previous = this.keepUserTextProtected;
+		this.keepUserTextProtected = true;
+		try {
+			return await work();
+		} finally {
+			this.keepUserTextProtected = previous;
+		}
+	}
+
 	protected runClocks(): RunClocks | undefined {
 		return this.choiceExecutor?.clocks ?? this.clocks;
 	}
 
 	protected async format(input: string): Promise<string> {
-		let output: string = input;
+		return this.formatScalarTokens(await this.expandCodeAndIncludes(input));
+	}
+
+	/** The stage that runs code: inline scripts, macros, included templates, and global snippets. */
+	protected async expandCodeAndIncludes(input: string): Promise<string> {
+		// {{MACRO:}} is read in this stage, so its options must be decoded first.
+		let output = unescapePipesInTokens(input);
 
 		output = await this.replaceInlineJavascriptInString(output);
 		output = await this.replaceMacrosInString(output);
-		output = await this.replaceTemplateInString(output);
+		const outerIncludingText = this.includingText;
+		// Globals expand after the includes render, but a VDATE inside one still counts.
+		this.includingText = await this.replaceGlobalVarInString(output);
+		try {
+			output = await this.replaceTemplateInString(output);
+		} finally {
+			this.includingText = outerIncludingText;
+		}
 		// Expand global variables early so injected snippets can be further formatted
-		output = await this.replaceGlobalVarInString(output);
+		return this.replaceGlobalVarInString(output);
+	}
+
+	protected async formatScalarTokens(input: string): Promise<string> {
+		let output = input;
 		output = this.replaceDateInString(output);
 		output = this.replaceTimeInString(output);
 		output = await this.replaceValueInString(output);
@@ -103,25 +127,19 @@ export class CompleteFormatter extends Formatter {
 		output = await this.replaceFileInString(output);
 		output = await this.replaceMathValueInString(output);
 		output = this.replaceRandomInString(output);
+		// PROPERTY last so seeded property text is never re-scanned as format
+		// tokens (#1748). Scripts/macros/globals above can still inject the token.
+		if (!this.defersPropertyExpansion()) {
+			output = this.replacePropertyInString(output);
+		}
 
-		return output;
+		return this.promptScope === "captureText" ||
+			(this.promptScope === "noteBody" && this.preserveTemplateCursorMarkers)
+			? output : stripCursorMarkers(output);
 	}
 
 	protected async replaceGlobalVarInString(input: string): Promise<string> {
-		let output = input;
-		// Allow nested globals up to a small recursion limit
-		let guard = 0;
-		const re = new RegExp(GLOBAL_VAR_REGEX.source, "gi");
-		while (re.test(output)) {
-			if (++guard > 5) break;
-			output = output.replace(re, (_m, rawName) => {
-				const name = String(rawName ?? "").trim();
-				if (!name) return _m;
-				const snippet = this.plugin?.settings?.globalVariables?.[name];
-				return typeof snippet === "string" ? snippet : "";
-			});
-		}
-		return output;
+		return expandGlobalVariables(input, this.plugin?.settings?.globalVariables);
 	}
 
 	/**
@@ -143,58 +161,118 @@ export class CompleteFormatter extends Formatter {
 		let output = await this.withPromptScope(scope, input, () =>
 			this.format(input),
 		);
-		// A {{title}} produced AFTER the raw-input check — by an expanded global
-		// snippet ({{GLOBAL_VAR:x}} -> {{title}}) or a {{VALUE}} that resolved to
-		// the literal text "{{title}}" — would otherwise survive into the file name
-		// (the token pass below omits `title`, leaving it verbatim). Re-check post
-		// format() so it throws the same circular-dependency error, mirroring
-		// formatTemplateFilePath's post-global-expansion guard.
+		// Expanded values can introduce {{title}}, so repeat the circular-title check after formatting.
 		if (TITLE_REGEX.test(output)) {
 			throw new Error(
 				"{{title}} cannot be used in file names as it would create a circular dependency. The title is derived from the filename itself.",
 			);
 		}
-		// {{filenamecurrent}} + {{folder}} + {{foldercurrent}} in one pass (links
-		// stay literal in a file name; {{title}} threw above). One pass so no token
-		// re-scans another's output (#1358). activeFolder is "path": this entry
-		// point produces file paths (file names AND capture targets), where a
-		// missing active file must abort rather than strip to a root-level path.
+		// Resolve contextual tokens in one pass; missing active-folder paths must abort rather than retarget writes.
 		output = this.replaceCurrentFileTokensInString(output, {
 			fileName: true,
 			folder: true,
 			activeFolder: "path",
 		});
-		return output;
+		return restoreUserText(output);
+	}
+
+	/**
+	 * When true, {@link format} leaves `{{PROPERTY}}` for the caller to expand
+	 * after later passes (used by {@link formatPropertyValue} so seeded text is
+	 * not re-scanned by current-file tokens).
+	 */
+	private skipPropertyExpansion = false;
+
+	/**
+	 * An included `{{TEMPLATE:}}` renders in its own formatter, but its text lands
+	 * wherever its includer's text does. So it answers every question about that
+	 * destination (list items, `{{PROPERTY}}`, selection as value, clipboard,
+	 * links) the way its includer does. These are the hooks
+	 * CaptureChoiceFormatter overrides.
+	 */
+	private get includer(): CompleteFormatter | undefined {
+		return this.templateInclusion?.includer;
+	}
+
+	/** This formatter's text while its `{{TEMPLATE:}}` includes render. */
+	private includingText: string | null = null;
+
+	/**
+	 * Includes render before the including text's `{{VDATE}}`s. So when an
+	 * include's `{{VALUE:<name>}}` reuses one, resolve that VDATE now: it asks
+	 * the date prompt (or takes the prefilled answer) and records its format, as
+	 * a reuse in the including text itself would.
+	 */
+	protected override async resolveIncludingTextDate(variableName: string): Promise<void> {
+		if (!this.includer || findDateVariableFormat(this.variables, variableName) !== undefined) return;
+		for (let includer: CompleteFormatter | undefined = this.includer; includer; includer = includer.includer) {
+			// Every VDATE a named VALUE could match, in order, as the including
+			// text's own VDATE phase would resolve them before its VALUEs.
+			const sameName = [...(includer.includingText ?? "").matchAll(new RegExp(DATE_VARIABLE_REGEX.source, "gi"))]
+				.filter((match) => match[1]?.trim().toLowerCase() === variableName.toLowerCase());
+			if (sameName.length > 0) {
+				await includer.replaceDateVariableInString(sameName.map((match) => match[0]).join(""));
+				return;
+			}
+		}
+	}
+
+	private defersPropertyExpansion(): boolean {
+		return this.includer?.defersPropertyExpansion() ?? this.skipPropertyExpansion;
+	}
+
+	protected writesListPicksAsLines(): boolean {
+		return this.includer?.writesListPicksAsLines() ?? super.writesListPicksAsLines();
 	}
 
 	async formatPropertyName(input: string): Promise<string> {
 		return await this.withPromptScope("propertyName", input, async () =>
-			this.replaceCurrentFileTokensInString(await this.format(input), {
+			restoreUserText(this.replaceCurrentFileTokensInString(await this.format(input), {
 				links: true, fileName: true, folder: true, activeFolder: "content", title: true,
-			}),
+			})),
 		);
 	}
 
-	async formatPropertyValue(input: string): Promise<unknown> {
-		return await this.preserveSingleTokenValue(input, () =>
-			this.withPromptScope("propertyValue", input, async () =>
-				this.replaceCurrentFileTokensInString(await this.format(input), {
+	/** `listItems`: the value lands in a list, so each list pick becomes its own line (item). */
+	async formatPropertyValue(input: string, options: { listItems?: boolean } = {}): Promise<unknown> {
+		const value = await this.preserveSingleTokenValue(input, () =>
+			this.withPromptScope("propertyValue", input, async () => {
+				// Author tokens (VALUE/DATE/…) and current-file tokens run first.
+				// PROPERTY expands last so the seeded snapshot is inserted as
+				// literal text and cannot be re-scanned (#1748 CodeRabbit).
+				this.skipPropertyExpansion = true;
+				this.listPicksAsLines = options.listItems ?? false;
+				let output: string;
+				try {
+					output = await this.format(input);
+				} finally {
+					this.skipPropertyExpansion = false;
+					this.listPicksAsLines = false;
+				}
+				output = this.replaceCurrentFileTokensInString(output, {
 					links: true, fileName: true, folder: true, activeFolder: "content", title: true,
-				}),
-			),
+				});
+				return this.replacePropertyInString(output);
+			}),
 		);
+		// A value that is not the formatted text is the token's own value, kept as data.
+		return typeof value === "string" ? restoreUserText(stripCursorMarkers(value)) : value;
+	}
+
+	async formatTemplateContent(input: string): Promise<string> {
+		return this.formatContentWithCursorMarkers(input, true);
 	}
 
 	async formatFileContent(input: string): Promise<string> {
-		let output: string = input;
+		return this.formatContentWithCursorMarkers(input, false);
+	}
 
-		// formatFileContent is the ONLY content pass: every path pass
-		// (formatFileName/formatFolderPath/formatTemplateFilePath/
-		// formatLocationString) calls format() directly. Image paste in value
-		// prompts is therefore enabled exactly here — a pasted embed link is
-		// note-body material and must never reach a file-name/path prompt
-		// (issue #1484). Restored in finally so a nested/failed pass can't
-		// leak the flag into a later path pass on the same formatter.
+	private async formatContentWithCursorMarkers(input: string, preserveMarkers: boolean): Promise<string> {
+		let output: string = input;
+		const previousCursorMarkers = this.preserveTemplateCursorMarkers;
+		this.preserveTemplateCursorMarkers = preserveMarkers;
+
+		// Enable image paste only during content formatting, restoring the flag across nested or failed passes.
 		const previousImagePaste = this.contentValuePromptsAcceptImagePaste;
 		// ...unless the declared scope says this content is destined for a PATH,
 		// which happens when a {{TEMPLATE:}} include is spliced into a file name
@@ -204,14 +282,9 @@ export class CompleteFormatter extends Formatter {
 			output = await this.format(output);
 		} finally {
 			this.contentValuePromptsAcceptImagePaste = previousImagePaste;
+			this.preserveTemplateCursorMarkers = previousCursorMarkers;
 		}
-		// Resolve ALL note-derived tokens ({{linkcurrent}}, {{linksection}},
-		// {{filenamecurrent}}, {{folder}}, {{foldercurrent}}, {{title}}) in ONE
-		// pass so no token re-scans another's generated output — fixing both the
-		// cross-pass corruption and the infinite loop a token-named file/title
-		// caused (#1358). activeFolder is "content": in a note body an unresolved
-		// token cannot misplace data, so it follows the same required/optional
-		// contract as the link/file-name tokens.
+		// A single contextual pass preserves token-looking replacement text. Content may strip optional missing tokens.
 		output = this.replaceCurrentFileTokensInString(output, {
 			links: true,
 			fileName: true,
@@ -220,7 +293,8 @@ export class CompleteFormatter extends Formatter {
 			title: true,
 		});
 
-		return output;
+		// An included template's text is restored by the formatter that includes it.
+		return this.keepUserTextProtected || this.includer ? output : restoreUserText(output);
 	}
 
 	async formatFolderPath(folderName: string): Promise<string> {
@@ -234,56 +308,24 @@ export class CompleteFormatter extends Formatter {
 		const formatted = await this.withPromptScope("folder", folderName, () =>
 			this.format(folderName),
 		);
-		// As in formatFileName: a {{title}} injected by a global snippet or a
-		// {{VALUE}} resolving to "{{title}}" slips past the raw-input check above,
-		// then the folder-only token pass would leave it literal in the path.
-		// Re-check post format() so it throws the circular-dependency error.
+		// Repeat the circular-title guard after expanding globals and user values.
 		if (TITLE_REGEX.test(formatted)) {
 			throw new Error(
 				"{{title}} cannot be used in folder paths as it would create a circular dependency. The title is derived from the filename itself.",
 			);
 		}
 
-		// {{FOLDER}} in a folder definition is self-referential: the target
-		// folder isn't known while folders are being resolved, so it collapses
-		// to an empty string rather than leaking the literal token into a path.
-		// {{FOLDERCURRENT}} is NOT self-referential (the active file's folder is
-		// known here) and must resolve: left verbatim it would be threaded into
-		// getOrCreateFolder and CREATE a vault folder literally named
-		// "{{foldercurrent}}". "path" mode: no active file aborts with a clear
-		// error instead of silently collapsing the folder to the vault root.
+		// The target folder is still unknown here and resolves empty; the active folder resolves or aborts in path mode.
 		const resolved = this.replaceCurrentFileTokensInString(formatted, {
 			folder: true,
 			activeFolder: "path",
 		});
-		// A token that legitimately resolves to "" at the START of the path (a
-		// root-level active file in "{{FOLDERCURRENT}}/Subnotes", or the {{FOLDER}}
-		// collapse above) leaves a leading "/", which validateFolderPath would
-		// reject as an empty first segment — falling back to the vault root
-		// instead of using "Subnotes". Strip leading slashes so the folder path is
-		// root-relative, matching what the capture/file-name paths do downstream.
-		return resolved.replace(/^\/+/, "");
+		// Empty folder tokens can leave leading slashes; remove them to keep the remaining path vault-relative.
+		return restoreUserText(resolved).replace(/^\/+/, "");
 	}
 
-	/**
-	 * Resolves QuickAdd format tokens inside a *template source path*, so a
-	 * choice can point at e.g. "Templates/{{value:type}} Template.md" (issue
-	 * #620). This is deliberately a PATH-SAFE subset of {@link format}: it
-	 * resolves value/date/time/field/file/global/selected/clipboard/random/math
-	 * tokens, but never runs macros, inline JavaScript, or {{TEMPLATE:}}
-	 * inclusion — a file-path lookup should not execute code or splice another
-	 * template's body into a path. Note-relative tokens ({{title}}, {{FOLDER}},
-	 * {{FOLDERCURRENT}}, {{FILENAMECURRENT}}, {{LINKCURRENT}}, {{LINKSECTION}})
-	 * are intentionally left literal: a
-	 * source template has no "current note" or target folder, so an unresolved
-	 * token fails visibly instead of silently collapsing the path.
-	 *
-	 * Resolve once at the engine entry and thread the result downward; the
-	 * resolved path then feeds BOTH the target file's extension/name and the
-	 * content read, so they can never disagree (e.g. a token that expands to
-	 * `.canvas`). Do not re-run this on an already-resolved path — tokens like
-	 * {{date}} / {{random}} would re-evaluate to a different value.
-	 */
+	/** Resolve source paths once, without executable tokens or inclusions.
+ * The resolved path must supply both the source content and the target extension. */
 	async formatTemplateFilePath(input: string): Promise<string> {
 		if (TITLE_REGEX.test(input)) {
 			throw new Error(
@@ -291,48 +333,26 @@ export class CompleteFormatter extends Formatter {
 			);
 		}
 
-		let output = input;
+		let output = unescapePipesInTokens(input);
 		// Expand globals first so an injected snippet's path-safe tokens resolve.
 		output = await this.replaceGlobalVarInString(output);
 
-		// A global variable can itself expand to "{{title}}", slipping past the
-		// up-front guard. Re-check here — after global expansion but BEFORE
-		// user-input substitution — so a global-injected {{title}} throws the
-		// clear circular-title error, without false-positiving on a user value
-		// that merely contains the literal text "{{title}}".
+		// Check global-injected title tokens before user substitution, allowing literal title text in user answers.
 		if (TITLE_REGEX.test(output)) {
 			throw new Error(
 				"{{title}} cannot be used in a template path — the title is derived from the created file, not the source template.",
 			);
 		}
 
-		// Path-safe replacers, mirroring the tail of format() (completeFormatter
-		// .format) MINUS macros, inline JS, and {{TEMPLATE:}} inclusion. Keep this
-		// list in sync with format() when adding a path-safe token.
-		// Scoped on the ORIGINAL input: prompts opened here are filling in the
-		// template's source path, not the note being created.
-		output = await this.withPromptScope("templatePath", input, async () => {
-			let scoped = this.replaceDateInString(output);
-			scoped = this.replaceTimeInString(scoped);
-			scoped = await this.replaceValueInString(scoped);
-			scoped = await this.replaceSelectedInString(scoped);
-			scoped = await this.replaceClipboardInString(scoped);
-			scoped = await this.replaceDateVariableInString(scoped);
-			scoped = await this.replaceVariableInString(scoped);
-			scoped = await this.replaceFieldVarInString(scoped);
-			// {{FILE:...}} is path-safe (lists files + a picker, runs no code) and
-			// is collected from the template path by preflight (scanTemplateSource),
-			// so it MUST resolve here too or a `Templates/{{FILE:...|path}}` source
-			// path would prompt up front and then fail to resolve at runtime.
-			scoped = await this.replaceFileInString(scoped);
-			scoped = await this.replaceMathValueInString(scoped);
-			return this.replaceRandomInString(scoped);
-		});
+		// Use the shared scalar pass with the original input declaring the source-path prompt scope.
+		output = await this.withPromptScope("templatePath", input, () =>
+			this.formatScalarTokens(output),
+		);
 
 		// Trim so the suffix the engine reads for the extension matches the path
 		// getTemplateFile ultimately resolves (which trims) — otherwise a token
 		// that leaves trailing whitespace could split the two.
-		return output.trim();
+		return restoreUserText(output).trim();
 	}
 
 	/**
@@ -345,99 +365,66 @@ export class CompleteFormatter extends Formatter {
 		let output = await this.withPromptScope("lineTarget", input, () =>
 			this.format(input),
 		);
-		// Links + {{filenamecurrent}} + {{title}} in one pass so no token re-scans
-		// another's output (#1358). {{FOLDER}} and {{FOLDERCURRENT}} are
-		// deliberately left literal in location selectors (insert-after/before
-		// targets) — both can legitimately resolve to an empty string ("" target
-		// folder / root-level active file), and an empty selector would match the
-		// first line. Tokens that are nonempty-or-throw (links, file name) stay.
+		// Keep folder tokens literal in location selectors: an empty folder would match the first line.
 		output = this.replaceCurrentFileTokensInString(output, {
 			links: true,
 			fileName: true,
 			title: true,
 		});
-		return output;
+		return restoreUserText(output);
 	}
 
-	// getLinkSourcePath() inherits the base Formatter default (null);
-	// CaptureChoiceFormatter overrides it with the capture destination.
+	// CaptureChoiceFormatter overrides this with the capture destination.
+	protected getLinkSourcePath(): string | null {
+		return this.includer?.getLinkSourcePath() ?? null;
+	}
 
 	protected getCurrentFileLink(): string | null {
-		const currentFile = this.app.workspace.getActiveFile();
-		if (!currentFile) return null;
+		if (this.includer) return this.includer.getCurrentFileLink();
+		const file = currentFile(this.app, this.choiceExecutor);
+		if (!file) return null;
 
-		return this.app.fileManager.generateMarkdownLink(currentFile, "");
+		return this.app.fileManager.generateMarkdownLink(file, "");
+	}
+
+	protected missingCurrentNoteMessage(inApp: string): string {
+		return missingCurrentNoteMessage(this.choiceExecutor, inApp);
 	}
 
 	protected getCurrentFileName(): string | null {
-		const currentFile = this.app.workspace.getActiveFile();
-		if (!currentFile) return null;
-
-		return currentFile.basename;
+		return currentFile(this.app, this.choiceExecutor)?.basename ?? null;
 	}
 
-	/**
-	 * {{foldercurrent}}: the active file's parent folder, vault-relative with no
-	 * trailing slash. Obsidian's root TFolder has path "/", which collapses to ""
-	 * (matching setTargetFolderPath) so a root-level note yields a root-relative
-	 * sibling path instead of a literal leading "/". Uses the LIVE active file,
-	 * byte-consistent with getCurrentFileName/getCurrentFileLink.
-	 */
+	/** Current folder path without edge slashes; null means unavailable, empty means vault root. */
 	protected getCurrentFolderPath(): string | null {
-		const currentFile = this.app.workspace.getActiveFile();
-		if (!currentFile) return null;
+		const file = currentFile(this.app, this.choiceExecutor);
+		if (!file) return null;
 
-		const parentPath = currentFile.parent?.path ?? "";
+		const parentPath = file.parent?.path ?? "";
 		return parentPath === "/" ? "" : parentPath;
 	}
 
-	/**
-	 * Resolves {{linksection}} to a link to the current file at the heading the
-	 * cursor is currently under, e.g. `[[Note#Heading]]`, so clicking it scrolls
-	 * to that heading instead of the top of the file (issue #387).
-	 *
-	 * Read-only: it reads the active editor's cursor + the heading cache and
-	 * never modifies any file. Falls back to a plain whole-file link (like
-	 * {{linkcurrent}}) when there is no usable heading above the cursor, and to
-	 * `null` only when there is no active file at all (so the required/optional
-	 * behavior matches {{linkcurrent}}). The source path is shared with
-	 * {{linkcurrent}} via {@link getLinkSourcePath}, so relative links resolve
-	 * against the capture destination just like {{linkcurrent}} does.
-	 */
+	/** Resolve the cursor heading link only when present, honoring required/optional behavior. */
 	protected getCurrentFileLinkToSection(): string | null {
-		const currentFile = this.app.workspace.getActiveFile();
-		if (!currentFile) return null;
+		const file = currentFile(this.app, this.choiceExecutor);
+		if (!file) return null;
 
 		const sourcePath = this.getLinkSourcePath() ?? "";
 		// Never let section resolution throw out of a capture/template run — fall
 		// back to a whole-file link if anything goes wrong.
 		let subpath: string | null = null;
 		try {
-			subpath = this.getActiveHeadingSubpath(currentFile);
+			subpath = this.getActiveHeadingSubpath(file);
 		} catch {
 			subpath = null;
 		}
 
 		return subpath
-			? this.app.fileManager.generateMarkdownLink(
-					currentFile,
-					sourcePath,
-					subpath,
-				)
-			: this.app.fileManager.generateMarkdownLink(currentFile, sourcePath);
+			? this.app.fileManager.generateMarkdownLink(file, sourcePath, subpath)
+			: this.app.fileManager.generateMarkdownLink(file, sourcePath);
 	}
 
-	/**
-	 * Builds the `#Heading` (or `#Parent#Child` when needed for disambiguation)
-	 * subpath for the heading the cursor sits in, or null when none applies
-	 * (no editor for this file, reading mode, no cursor, or no heading above the
-	 * cursor). Delegates the pure selection/disambiguation/sanitization logic to
-	 * {@link buildSectionSubpath}.
-	 *
-	 * Headings are parsed from the LIVE editor buffer (via {@link
-	 * extractHeadingsFromLines}) rather than the metadata cache, so a just-typed
-	 * heading or a brand-new note works without waiting for the cache to reindex.
-	 */
+	/** Build a heading subpath, including parents where needed to disambiguate duplicate headings. */
 	private getActiveHeadingSubpath(file: TFile): string | null {
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 		// Only trust the cursor when the active markdown view is THIS file and is
@@ -451,10 +438,48 @@ export class CompleteFormatter extends Formatter {
 
 		// Split on \r?\n so CRLF buffers don't leave a trailing \r that breaks the
 		// heading parse (and so line indices match the editor's cursor line).
-		const headings = extractHeadingsFromLines(
-			editor.getValue().split(/\r?\n/),
-		);
+		const text = editor.getValue();
+		const parsed = extractHeadingsFromLines(text.split(/\r?\n/));
 
+		// Obsidian resolves a `#heading` link against its metadata cache, so when
+		// the buffer is saved (view.data is the last loaded/saved text) use those
+		// headings: they skip `#` lines inside comments, HTML, and math blocks.
+		// Unsaved text isn't in the cache yet, so keep the live parse instead.
+		// view.data keeps a CRLF file's line endings; the editor text is LF-only.
+		const saved = view.data.replace(/\r\n/g, "\n") === text;
+		const cache = saved ? this.app.metadataCache.getFileCache(file) : null;
+		const cached = (cache?.headings ?? []).map((h) => ({
+			heading: h.heading,
+			level: h.level,
+			line: h.position.start.line,
+		}));
+		// The cache catches up a few ms after a save (longer for big notes), so
+		// only trust it while every cached heading is still at its line, with its
+		// level, in the live parse. A renamed or removed heading would otherwise
+		// be linked.
+		const key = (h: { heading: string; level: number }) =>
+			`${h.level}:${sanitizeHeadingForSubpath(h.heading)}`;
+		const parsedByLine = new Map(parsed.map((p) => [p.line, key(p)]));
+		const fresh =
+			cache && cached.every((c) => parsedByLine.get(c.line) === key(c));
+		if (!fresh) return buildSectionSubpath(parsed, cursor.line);
+
+		// A heading added just before the save isn't cached yet (#2030), so add
+		// the parsed headings the cache lacks, except those inside a block
+		// Obsidian doesn't read headings from (an HTML block the parser can't
+		// detect).
+		const cachedLines = new Set(cached.map((c) => c.line));
+		const opaque = (cache.sections ?? []).filter(
+			(section) => section.type === "html" || section.type === "comment" || section.type === "math",
+		);
+		const added = parsed.filter(
+			(p) =>
+				!cachedLines.has(p.line) &&
+				!opaque.some(
+					(section) => section.position.start.line <= p.line && p.line <= section.position.end.line,
+				),
+		);
+		const headings = [...cached, ...added].sort((a, b) => a.line - b.line);
 		return buildSectionSubpath(headings, cursor.line);
 	}
 
@@ -463,22 +488,16 @@ export class CompleteFormatter extends Formatter {
 	}
 
 	protected shouldUseSelectionForValue(): boolean {
-		return true;
+		return this.includer?.shouldUseSelectionForValue() ?? true;
 	}
 
 	protected async getSelectedTextForValue(): Promise<string> {
-		return await this.getSelectedText();
+		return this.includer
+			? await this.includer.getSelectedTextForValue()
+			: await this.getSelectedText();
 	}
 
-	/**
-	 * Central guard for every token prompt this formatter can open. The requirement
-	 * collector pre-collects the inputs it can see, but tokens hidden behind a
-	 * format-syntax template path or capture target (which it cannot resolve up
-	 * front) still reach the formatter at runtime. On a non-interactive run (the CLI
-	 * without `ui`) there is no one to answer such a prompt, so opening it would hang
-	 * forever — abort with an actionable error instead. GUI runs leave `interactive`
-	 * at its default (true/undefined) and are unaffected.
-	 */
+	/** Allow remote prompts before applying headless rejection; every token prompt calls this guard. */
 	private assertInteractivePrompt(what: string): void {
 		if (this.choiceExecutor?.interactive === false) {
 			throw new ChoiceAbortError(
@@ -488,15 +507,7 @@ export class CompleteFormatter extends Formatter {
 		}
 	}
 
-	/**
-	 * The anonymous `{{VALUE}}` prompt. Its title, placeholder and context line
-	 * come from the scope the caller declared for the string being formatted, so
-	 * a Template's title prompt and a Capture's text prompt stop looking
-	 * identical (issue #1546). The derived title is used ONLY when the answer is
-	 * the whole string; otherwise the choice name stays the title and only the
-	 * placeholder names the field, because "Note title" over a format of
-	 * `{{DATE:YYYY-MM-DD}} {{VALUE}}` would invite the user to retype the date.
-	 */
+	/** Anonymous VALUE prompt metadata follows the declared scope, including optional image paste in content. */
 	private describeAnonymousValuePrompt(): {
 		title: string;
 		placeholder?: string;
@@ -508,6 +519,7 @@ export class CompleteFormatter extends Formatter {
 			this.promptScopeSoleValue,
 		);
 		const title =
+			this.valuePromptContext?.label ??
 			derived.title ??
 			(this.promptRunContext?.choiceName?.trim() || "Enter value");
 		const showDestination = scopeShowsDestination(this.promptScope);
@@ -550,8 +562,7 @@ export class CompleteFormatter extends Formatter {
 						await checkboxProvider.suggester(
 							["true", "false"],
 							["true", "false"],
-							this.valuePromptContext.description ??
-								this.describeAnonymousValuePrompt().title,
+							this.describeAnonymousValuePrompt().title,
 							false,
 						),
 					);
@@ -562,8 +573,7 @@ export class CompleteFormatter extends Formatter {
 						this.app,
 						["true", "false"],
 						["true", "false"],
-						this.valuePromptContext.description ??
-							this.describeAnonymousValuePrompt().title,
+						this.describeAnonymousValuePrompt().title,
 						undefined,
 						this.valuePromptContext.optional
 							? { skippable: true }
@@ -578,10 +588,7 @@ export class CompleteFormatter extends Formatter {
 				}
 			}
 			const prompt = this.describeAnonymousValuePrompt();
-			// Route to a remote interactive session (Raycast) when one is driving.
-			// PromptProvider has no context-line channel, so it is folded into the
-			// header - otherwise a remote run would come out of this change with
-			// LESS context than before (the header used to be the choice name).
+			// Remote prompts lack a context-line channel, so include context in their header.
 			const valueProvider = this.choiceExecutor?.promptProvider;
 			if (valueProvider) {
 				this.value = await valueProvider.inputPrompt(
@@ -596,10 +603,9 @@ export class CompleteFormatter extends Formatter {
 			try {
 				const linkSourcePath = this.getLinkSourcePath();
 				const promptFactory = new InputPrompt().factory(
-					this.valuePromptContext?.inputTypeOverride,
+					this.valuePromptContext?.inputTypeOverride ?? this.defaultValueInputType,
 				);
 				const defaultValue = this.valuePromptContext?.defaultValue;
-				const description = this.valuePromptContext?.description;
 				const promptOptions = this.buildInputPromptOptions(
 					this.valuePromptContext,
 					prompt.contextLine,
@@ -607,26 +613,14 @@ export class CompleteFormatter extends Formatter {
 				);
 				const placeholder =
 					this.valuePromptContext?.placeholder ?? prompt.placeholder;
-				if (linkSourcePath) {
-					this.value = await promptFactory.PromptWithContext(
-						this.app,
-						prompt.title,
-						placeholder,
-						defaultValue,
-						linkSourcePath,
-						description,
-						promptOptions,
-					);
-				} else {
-					this.value = await promptFactory.Prompt(
-						this.app,
-						prompt.title,
-						placeholder,
-						defaultValue,
-						description,
-						promptOptions,
-					);
-				}
+				this.value = await promptFactory.Prompt(
+					this.app,
+					prompt.title,
+					placeholder,
+					defaultValue,
+					undefined,
+					{ ...promptOptions, linkSourcePath: linkSourcePath || undefined },
+				);
 			} catch (error) {
 				if (isCancellationError(error)) {
 					throw new UserCancelError("Input cancelled by user");
@@ -643,11 +637,7 @@ export class CompleteFormatter extends Formatter {
 	): string | undefined {
 		const context = this.valuePromptContext;
 
-		// |type:checkbox forces a true/false picker (no free text). An active editor
-		// selection must not short-circuit that contract: only accept the selection
-		// when it is itself a boolean ("true"/"false", case/space-insensitive),
-		// otherwise return undefined so promptForValue falls through to the forced
-		// true/false picker instead of storing arbitrary selected text.
+		// Checkbox selections must be boolean text; other selections fall through to the true/false picker.
 		if (context?.inputTypeOverride === "checkbox") {
 			const boolText = selectedText.trim().toLowerCase();
 			return boolText === "true" || boolText === "false"
@@ -672,10 +662,7 @@ export class CompleteFormatter extends Formatter {
 		contextLine?: string,
 		contextLineFull?: string,
 	): InputPromptOptions {
-		// Image paste only for free-text prompts opened while formatting note
-		// CONTENT — never for number/slider (numeric sinks) and never during
-		// path passes (see contentValuePromptsAcceptImagePaste). The checkbox
-		// picker never reaches the input-prompt factory.
+		// Only free-text content prompts accept images; numeric and path prompts never do.
 		const imagePaste =
 			this.contentValuePromptsAcceptImagePaste &&
 			context?.inputTypeOverride !== "number" &&
@@ -696,117 +683,20 @@ export class CompleteFormatter extends Formatter {
 			allowPeek: true,
 		};
 	}
+	private promptRuntime(): PromptRuntime {
+		return {
+			app: this.app,
+			executor: this.choiceExecutor,
+			scope: this.promptScope,
+			runContext: this.promptRunContext,
+			assertInteractivePrompt: (what) => this.assertInteractivePrompt(what),
+			buildInputPromptOptions: (context, line, full) => this.buildInputPromptOptions(context, line, full),
+		};
+	}
 
-	protected async promptForVariable(
-		header?: string,
-		context?: PromptContext,
-	): Promise<string> {
-		// Route to a remote interactive session (Raycast) when one is driving.
-		const provider = this.choiceExecutor?.promptProvider;
-		if (provider) {
-			if (context?.type === "VDATE") {
-				return await provider.datePrompt(
-					header ?? context.label ?? "Enter date",
-					{
-						defaultValue: context.defaultValue,
-						dateFormat: context.dateFormat ?? "YYYY-MM-DD",
-						// Carry |time/|datetime so the remote client renders a time
-						// picker; otherwise the picked time is silently dropped.
-						withTime: context.withTime,
-					},
-				);
-			}
-			if (context?.inputTypeOverride === "checkbox") {
-				return String(
-					await provider.suggester(
-						["true", "false"],
-						["true", "false"],
-						context.description ?? header ?? context.label ?? "Choose value",
-						false,
-					),
-				);
-			}
-			return await provider.inputPrompt(
-				header ?? context?.label ?? "Enter value",
-				context?.placeholder,
-				context?.defaultValue,
-			);
-		}
-		this.assertInteractivePrompt(
-			header ? `{{VALUE:${header}}}` : "a template variable",
-		);
-		try {
-			// Named prompts already title themselves with the variable name, so they
-			// only gain the run context: which choice is asking, and where the
-			// answer lands (issue #1546).
-			const variableTitle = header ?? context?.label ?? "Enter value";
-			const showDestination = scopeShowsDestination(this.promptScope);
-			const namedContextLine = buildPromptContextLine(
-				this.promptRunContext,
-				variableTitle,
-				{ showDestination },
-			);
-			const namedContextLineFull = buildPromptContextLine(
-				this.promptRunContext,
-				variableTitle,
-				{ elide: false, showDestination },
-			);
-
-			// Use VDateInputPrompt for VDATE variables
-			if (context?.type === "VDATE") {
-				return await VDateInputPrompt.Prompt(
-					this.app,
-					(header as string) ?? context.label ?? "Enter date",
-					context.withTime
-						? "Enter a date & time (e.g., 'tomorrow at 3pm', '2025-12-25 14:30')"
-						: "Enter a date (e.g., 'tomorrow', 'next friday', '2025-12-25')",
-					context.defaultValue,
-					context.dateFormat ?? "YYYY-MM-DD",
-					{
-						optional: context.optional,
-						contextLine: namedContextLine,
-						contextLineFull: namedContextLineFull,
-						draftScopeId: this.promptRunContext?.draftScopeId,
-					},
-					context.withTime,
-				);
-			}
-
-			// {{VALUE:x|type:checkbox}} renders a forced true/false picker (no
-			// free text) so the written `x: true` round-trips as a Checkbox. The
-			// |label (carried as description for single-value tokens) becomes the
-			// modal title so the user knows which property they are setting (#202).
-			if (context?.inputTypeOverride === "checkbox") {
-				return await GenericSuggester.Suggest(
-					this.app,
-					["true", "false"],
-					["true", "false"],
-					context.description ?? header ?? context.label ?? "Choose value",
-					undefined,
-					context.optional ? { skippable: true } : undefined,
-				);
-			}
-
-			// Use default prompt for other variables
-			return await new InputPrompt().factory(context?.inputTypeOverride).Prompt(
-				this.app,
-				variableTitle,
-				context?.placeholder ??
-					(context?.defaultValue ? context.defaultValue : undefined),
-				context?.defaultValue,
-				context?.description,
-				this.buildInputPromptOptions(
-					context,
-					namedContextLine,
-					namedContextLineFull,
-				),
-			);
-		} catch (error) {
-			if (isCancellationError(error)) {
-				throw new UserCancelError("Input cancelled by user");
-			}
-			throw error;
-		}
+	protected async promptForVariable(header?: string,
+	context?: PromptContext): Promise<string> {
+		return promptForVariable(this.promptRuntime(), header, context);
 	}
 
 	protected async promptForMathValue(): Promise<string> {
@@ -827,402 +717,39 @@ export class CompleteFormatter extends Formatter {
 			throw error;
 		}
 	}
-
-	protected async suggestForValue(
-		suggestedValues: string[],
-		allowCustomInput = false,
-		context?: {
+	protected async suggestForValue(suggestedValues: string[],
+	allowCustomInput = false,
+	context?: {
 			placeholder?: string;
 			variableKey?: string;
 			displayValues?: string[];
 			optional?: boolean;
-		},
-	) {
-		// Route to a remote interactive session (Raycast) when one is driving this
-		// run - covers `{{VALUE:a,b,c}}` option lists in a template/capture format
-		// (e.g. a rating field) that the requirement collector didn't pre-satisfy.
-		const provider = this.choiceExecutor?.promptProvider;
-		if (provider) {
-			// Formatter tokens resolve to strings; the provider hands back the
-			// selected actualItems entry (here always a string) or a custom value.
-			return String(
-				await provider.suggester(
-					context?.displayValues ?? suggestedValues,
-					suggestedValues,
-					context?.placeholder,
-					allowCustomInput,
-				),
-			);
-		}
-		this.assertInteractivePrompt(
-			context?.variableKey ? `{{VALUE:${context.variableKey}}}` : "a value choice",
-		);
-		try {
-			const displayValues = context?.displayValues ?? suggestedValues;
-			if (allowCustomInput) {
-				return await InputSuggester.Suggest(
-					this.app,
-					displayValues,
-					suggestedValues,
-					{
-						...(context?.placeholder
-							? { placeholder: context.placeholder }
-							: {}),
-						...(context?.optional ? { skippable: true } : {}),
-					},
-				);
-			}
-			return await GenericSuggester.Suggest(
-				this.app,
-				displayValues,
-				suggestedValues,
-				context?.placeholder,
-				undefined,
-				context?.optional ? { skippable: true } : undefined,
-			);
-		} catch (error) {
-			if (isCancellationError(error)) {
-				throw new UserCancelError("Input cancelled by user");
-			}
-			throw error;
-		}
+		}): Promise<string> {
+		return suggestForValue(this.promptRuntime(), suggestedValues, allowCustomInput, context);
 	}
-
-	protected async suggestForValueMulti(
-		suggestedValues: string[],
-		allowCustomInput = false,
-		context?: {
+	protected async suggestForValueMulti(suggestedValues: string[],
+	allowCustomInput = false,
+	context?: {
 			placeholder?: string;
 			variableKey?: string;
 			displayValues?: string[];
 			optional?: boolean;
-		},
-	): Promise<string[]> {
-		const displayValues = context?.displayValues ?? suggestedValues;
-		// Route to a remote interactive session (Raycast) when one is driving.
-		const provider = this.choiceExecutor?.promptProvider;
-		if (provider) {
-			return await provider.suggesterMulti(displayValues, suggestedValues, {
-				placeholder: context?.placeholder,
-				allowCustomInput,
-			});
-		}
-		this.assertInteractivePrompt(
-			context?.variableKey
-				? `{{VALUE:${context.variableKey}}}`
-				: "a multi-select value",
-		);
-		try {
-			return await MultiSuggester.Suggest(
-				this.app,
-				displayValues,
-				suggestedValues,
-				{
-					...(context?.placeholder
-						? { placeholder: context.placeholder }
-						: {}),
-					allowCustomValue: allowCustomInput,
-					...(context?.optional ? { skippable: true } : {}),
-				},
-			);
-		} catch (error) {
-			if (isCancellationError(error)) {
-				throw new UserCancelError("Input cancelled by user");
-			}
-			throw error;
-		}
+		}): Promise<string[]> {
+		return suggestForValueMulti(this.promptRuntime(), suggestedValues, allowCustomInput, context);
 	}
-
 	protected async suggestForField(fieldInput: string): Promise<string | string[]> {
 		this.assertInteractivePrompt(`{{FIELD:${fieldInput}}}`);
-		// Route the final picker to a remote interactive session (Raycast) when one
-		// is driving; the vault-side value collection below still runs unchanged.
-		const provider = this.choiceExecutor?.promptProvider;
-		try {
-			// Parse the field input to extract field name and filters. Do NOT warn
-			// on unknown keys here: the field replacer in formatter.ts already parses
-			// the same token with { warnUnknown: true } before calling this, so
-			// warning again would emit a duplicate notice per malformed FIELD token.
-			const { fieldName, filters, multiSelect } =
-				FieldSuggestionParser.parse(fieldInput);
-
-			// Resolve the active-note default (issue #1429) BEFORE collection but apply
-			// it AFTER, so the resolved value never enters the collection cache key
-			// (which is keyed partly on filters.defaultValue). Gate strictly on
-			// "active"; an unknown source is ignored. `null` => no usable active value
-			// (no/non-Markdown active file, or a missing/empty/object property).
-			const activeDefault =
-				filters.defaultFrom === "active"
-					? resolveActiveNoteFieldDefault(
-							this.app,
-							this.choiceExecutor?.triggerContext?.activeFile ?? null,
-							fieldName,
-						)
-					: null;
-
-			// Collect and process via shared collector (filters unmutated).
-			const { values: collectedValues, hasDefaultValue: literalHasDefault } =
-				await collectFieldValuesProcessedDetailed(this.app, fieldName, filters);
-
-			let values = collectedValues;
-			let hasDefaultValue = literalHasDefault;
-			// The default shown in the placeholder hint: the active-note value wins
-			// over a literal |default: when both are present.
-			let effectiveDefault = filters.defaultValue;
-
-			if (!multiSelect && typeof activeDefault === "string") {
-				// Promote the active note's scalar value to the top so an empty-query
-				// Enter accepts it, matching the existing default-always semantics.
-				values = FieldValueProcessor.promoteValueToFront(
-					values,
-					activeDefault,
-					filters.caseSensitive,
-				);
-				effectiveDefault = activeDefault;
-				hasDefaultValue = true;
-			} else if (
-				!multiSelect &&
-				Array.isArray(activeDefault) &&
-				activeDefault.length > 0
-			) {
-				// A list-valued property has no single default; lists apply to |multi
-				// only. Log (console-only) so a user expecting a default isn't mystified.
-				log.logMessage(
-					`{{FIELD:${fieldName}|default-from:active}}: the active note's "${fieldName}" is a list value, which applies only to |multi FIELD prompts, so no default was prefilled.`,
-				);
-			}
-
-			// Enhance placeholder with context
-			let placeholder = multiSelect
-				? `Select values for ${fieldName}`
-				: `Enter value for ${fieldName}`;
-			if (hasDefaultValue && effectiveDefault) {
-				placeholder = multiSelect
-					? `Select values for ${fieldName} (default: ${effectiveDefault})`
-					: `Enter value for ${fieldName} (default: ${effectiveDefault})`;
-			}
-
-			if (multiSelect) {
-				// When the vault has no existing values yet, seed the picker with the
-				// same smart defaults the single-select no-values fallback surfaces
-				// (e.g. To Do / In Progress / Done), so a brand-new {{FIELD:x|multi}}
-				// offers starting hints instead of an empty list. Custom values stay
-				// enabled so the user can still type anything.
-				let multiValues = values;
-				if (values.length === 0 && !filters.defaultValue) {
-					const smartDefaults = FieldValueProcessor.getSmartDefaults(
-						fieldName,
-						[],
-					);
-					if (smartDefaults.length > 0) multiValues = smartDefaults;
-				}
-				// Pre-check the active note's value(s) (scalar -> one, list -> each).
-				// Never [undefined]: activeDefault is null | string | string[].
-				// Canonicalize each against the collected suggestions under the dedup
-				// case fold, so an active "Done" toggles a collected "done" option
-				// instead of adding a duplicate custom row (matching FIELD's
-				// case-insensitive dedup).
-				const preselected =
-					activeDefault === null
-						? undefined
-						: (Array.isArray(activeDefault)
-								? activeDefault
-								: [activeDefault]
-							).map((v) =>
-								FieldValueProcessor.canonicalizeAgainst(
-									multiValues,
-									v,
-									filters.caseSensitive,
-								),
-							);
-				// Route to a remote interactive session (Raycast) when one is driving.
-				if (provider) {
-					return await provider.suggesterMulti(multiValues, multiValues, {
-						placeholder,
-						allowCustomInput: true,
-						preselected:
-							preselected && preselected.length > 0 ? preselected : undefined,
-					});
-				}
-				return await MultiSuggester.Suggest(this.app, multiValues, multiValues, {
-					placeholder,
-					allowCustomValue: true,
-					...(preselected && preselected.length > 0
-						? { preselected }
-						: {}),
-				});
-			}
-
-			if (values.length === 0) {
-				// No values found even after processing defaults
-				let fallbackPrompt = `No existing values were found in your vault.`;
-
-				// Suggest smart defaults if no custom default was provided
-				if (!filters.defaultValue) {
-					const smartDefaults = FieldValueProcessor.getSmartDefaults(
-						fieldName,
-						[],
-					);
-					if (smartDefaults.length > 0) {
-						fallbackPrompt += `\n\nSuggested values for ${fieldName}: ${smartDefaults.slice(0, 3).join(", ")}`;
-					}
-				}
-
-				if (provider) {
-					return await provider.inputPrompt(
-						`Enter value for ${fieldName}`,
-						fallbackPrompt,
-					);
-				}
-				return await GenericInputPrompt.PromptWithContext(
-					this.app,
-					`Enter value for ${fieldName}`,
-					fallbackPrompt,
-					undefined,
-					this.getLinkSourcePath() ?? undefined,
-					undefined,
-					{ allowPeek: true },
-				);
-			}
-
-			if (provider) {
-				return String(
-					await provider.suggester(values, values, placeholder, true),
-				);
-			}
-			return await InputSuggester.Suggest(this.app, values, values, {
-				placeholder,
-			});
-		} catch (error) {
-			if (isCancellationError(error)) {
-				throw new UserCancelError("Input cancelled by user");
-			}
-			throw error;
-		}
+		return suggestForField({ app: this.app, executor: this.choiceExecutor, getSourcePath: () => this.getLinkSourcePath() }, fieldInput);
 	}
 
 	private generateCacheKey(filters: FieldFilter): string {
 		return generateFieldCacheKey(filters);
 	}
-
 	protected async suggestForFile(parsed: ParsedFileToken): Promise<string | string[]> {
 		this.assertInteractivePrompt(
 			`{{FILE}} (pick a file from ${parsed.folderPath})`,
 		);
-		// Route the final picker to a remote interactive session (Raycast) when one
-		// is driving; the vault-side file filtering below still runs unchanged.
-		const provider = this.choiceExecutor?.promptProvider;
-		try {
-			const files = FieldSuggestionFileFilter.filterFiles(
-				this.app.vault.getMarkdownFiles(),
-				parsed.filter,
-				(file) => this.app.metadataCache.getFileCache(file),
-			);
-
-			const placeholder =
-				parsed.label ?? `Select a file from ${parsed.folderPath}`;
-
-			// Empty folder (or no match): fall back to free-text so a capture never
-			// dead-ends, mirroring suggestForField. A typed value is stored as custom
-			// (never resolved to a real file); an empty/skip stays "".
-			if (files.length === 0) {
-				const description = `No markdown files found in "${parsed.folderPath}". Type a value or leave empty.`;
-				const typed = provider
-					? await provider.inputPrompt(placeholder, description)
-					: await GenericInputPrompt.Prompt(
-							this.app,
-							placeholder,
-							description,
-							undefined,
-							undefined,
-							{ optional: parsed.optional || undefined, allowPeek: true },
-						);
-				if (parsed.multiSelect) {
-					return typed ? [`${FILE_CUSTOM_PREFIX}${typed}`] : [];
-				}
-				return typed ? `${FILE_CUSTOM_PREFIX}${typed}` : "";
-			}
-
-			const displayItems = buildFileDisplayLabels(
-				files,
-				(file) => this.app.metadataCache.getFileCache(file),
-			);
-			const items = files.map((file) => `${FILE_PICK_PREFIX}${file.path}`);
-
-			if (parsed.multiSelect) {
-				const result = provider
-					? await provider.suggesterMulti(displayItems, items, {
-							placeholder,
-							allowCustomInput: parsed.allowCustomInput,
-						})
-					: await MultiSuggester.Suggest(this.app, displayItems, items, {
-							placeholder,
-							allowCustomValue: parsed.allowCustomInput,
-							...(parsed.optional ? { skippable: true } : {}),
-						});
-				return result.map((item) =>
-					items.includes(item) ? item : `${FILE_CUSTOM_PREFIX}${item}`,
-				);
-			}
-
-			if (provider) {
-				const result = String(
-					await provider.suggester(
-						displayItems,
-						items,
-						placeholder,
-						parsed.allowCustomInput,
-					),
-				);
-				if (!result) return "";
-				return items.includes(result)
-					? result
-					: `${FILE_CUSTOM_PREFIX}${result}`;
-			}
-
-			if (parsed.allowCustomInput) {
-				const basenames = new Set(
-					files.map((file) => file.basename.toLowerCase()),
-				);
-				const displayLabels = new Set(
-					displayItems.map((label) => label.toLowerCase()),
-				);
-				const result = await InputSuggester.Suggest(
-					this.app,
-					displayItems,
-					items,
-					{
-						placeholder,
-						// Typing a real basename (e.g. "Tom", or "tom") should pick that
-						// file, not add a separate, indistinguishable custom row.
-						valueExists: (typed) =>
-							basenames.has(typed.toLowerCase()) ||
-							displayLabels.has(typed.toLowerCase()),
-						...(parsed.optional ? { skippable: true } : {}),
-					},
-				);
-				if (!result) return ""; // skipped
-				// A chosen row returns the encoded item; anything else is a type-in.
-				return items.includes(result)
-					? result
-					: `${FILE_CUSTOM_PREFIX}${result}`;
-			}
-
-			const result = await GenericSuggester.Suggest(
-				this.app,
-				displayItems,
-				items,
-				placeholder,
-				undefined,
-				parsed.optional ? { skippable: true } : undefined,
-			);
-			return result ?? "";
-		} catch (error) {
-			if (isCancellationError(error)) {
-				throw new UserCancelError("Input cancelled by user");
-			}
-			throw error;
-		}
+		return suggestForFile({ app: this.app, executor: this.choiceExecutor, getSourcePath: () => this.getLinkSourcePath() }, parsed);
 	}
 
 	protected async getMacroValue(
@@ -1243,7 +770,7 @@ export class CompleteFormatter extends Formatter {
 			this.variables,
 		);
 		const macroOutput =
-			(await macroEngine.runAndGetOutput(macroName, context)) ?? "";
+			(await macroEngine.runAndGetOutput(macroName, context, this.choiceChain)) ?? "";
 
 		// Copy variables from macro execution
 		macroEngine.getVariables().forEach((value, key) => {
@@ -1262,6 +789,7 @@ export class CompleteFormatter extends Formatter {
 		const childInclusion = {
 			visited: this.templateInclusion.visited,
 			depth: this.templateInclusion.depth + 1,
+			includer: this,
 		};
 		const childEngine = new SingleTemplateEngine(
 			this.app,
@@ -1274,16 +802,16 @@ export class CompleteFormatter extends Formatter {
 		// templates ({{TEMPLATE:...}}), which render via this child engine's own
 		// formatter.
 		childEngine.setTargetFolderPath(this.targetFolderPath);
+		childEngine.choiceChain = this.choiceChain;
+		if (this.preserveTemplateCursorMarkers && this.promptScope === "noteBody") {
+			childEngine.setPreserveCursorMarkers(true);
+		}
 		// An include spliced into a path is part of that path: keep the caller's
 		// scope so its prompts do not claim to be asking for note content.
 		if (this.promptScope !== "generic") {
 			childEngine.setPromptScope(this.promptScope);
 		}
-		// Included templates prompt through the child's own formatter, so the run
-		// context has to travel with them or their prompts lose the choice name.
-		// The draft scope is narrowed to this template: the child raises its OWN
-		// {{VALUE}} prompt in the same run, and sharing the parent's draft key
-		// would open it pre-filled with the parent's answer.
+		// Propagate run context but give included templates distinct draft keys to avoid reusing parent answers.
 		if (this.promptRunContext) {
 			childEngine.setPromptRunContext({
 				...this.promptRunContext,
@@ -1298,13 +826,11 @@ export class CompleteFormatter extends Formatter {
 	}
 
 	protected async getSelectedText(): Promise<string> {
-		const activeView = getActiveMarkdownEditorView(this.app);
-		if (!activeView) return "";
-
-		return activeView.editor.getSelection();
+		return currentSelection(this.app, this.choiceExecutor);
 	}
 
 	protected async getClipboardContent(): Promise<string> {
+		if (this.includer) return this.includer.getClipboardContent();
 		try {
 			return await navigator.clipboard.readText();
 		} catch {
@@ -1319,11 +845,11 @@ export class CompleteFormatter extends Formatter {
 
 	protected async replaceInlineJavascriptInString(input: string) {
 		let output: string = input;
+		let fence = findNextInlineScript(output);
 
-		while (INLINE_JAVASCRIPT_REGEX.test(output)) {
-			const match = INLINE_JAVASCRIPT_REGEX.exec(output);
-			if (!match) break;
-			const code = match.at(1)?.trim();
+		while (fence) {
+			const { start, end, code } = fence;
+			let replacement = "";
 
 			if (code) {
 				// Imported lazily to avoid the completeFormatter ⇄ engine cycle (#1249).
@@ -1336,6 +862,7 @@ export class CompleteFormatter extends Formatter {
 					//@ts-ignore
 					this.choiceExecutor,
 					this.variables,
+					this.choiceChain,
 				);
 				const outVal: unknown = await executor.runAndGetOutput(code);
 
@@ -1343,7 +870,6 @@ export class CompleteFormatter extends Formatter {
 					this.variables.set(key, executor.params.variables[key]);
 				}
 
-				let replacement = "";
 				if (typeof outVal === "string") {
 					// Keep string insertion byte-for-byte compatible, including the
 					// later formatter passes that may process tokens in the result.
@@ -1359,8 +885,8 @@ export class CompleteFormatter extends Formatter {
 					replacement =
 						this.renderCollectedOrArrayValue({
 							input: output,
-							matchStart: match.index,
-							matchEnd: match.index + match[0].length,
+							matchStart: start,
+							matchEnd: end,
 							rawValue: outVal,
 							fallbackKey: "inlineScript",
 							heuristicEnabled: this.isTemplatePropertyTypesEnabled(),
@@ -1368,16 +894,13 @@ export class CompleteFormatter extends Formatter {
 				}
 				// null/undefined and unsupported values intentionally keep the
 				// legacy empty-output behavior rather than inventing serialization.
-				output = this.replacer(
-					output,
-					INLINE_JAVASCRIPT_REGEX,
-					replacement,
-				);
-			} else {
-				// Empty/whitespace-only fence (e.g. ```js quickadd\n```): consume the
-				// matched block so the loop terminates instead of spinning forever.
-				output = this.replacer(output, INLINE_JAVASCRIPT_REGEX, "");
 			}
+			// An empty/whitespace-only fence (e.g. ```js quickadd\n```) is consumed
+			// too, so the loop terminates instead of spinning forever.
+			output = output.slice(0, start) + replacement + output.slice(end);
+			// Scan on from the replacement, not past it: a script's output can
+			// hold a fence of its own, which then runs too.
+			fence = findNextInlineScript(output, inlineScriptRescanFrom(output, start));
 		}
 
 		return output;

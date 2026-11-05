@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
-	captureFailureArtifacts,
 	clearVaultRunLockMarker,
 	createSandboxApi,
 } from "obsidian-e2e";
+import { registerFailureArtifacts } from "obsidian-e2e/vitest";
 import type { ObsidianClient, SandboxApi, PluginHandle, VaultRunLock } from "obsidian-e2e";
 import {
 	acquireQuickAddVaultRunLock,
@@ -37,6 +37,7 @@ const behavior = {
 	appendTop: { kind: "apply", mode: "appendTop" },
 	overwrite: { kind: "apply", mode: "overwrite" },
 	doNothing: { kind: "apply", mode: "doNothing" },
+	leaveUnchanged: { kind: "apply", mode: "leaveUnchanged" },
 	prompt: { kind: "prompt" },
 } as const;
 
@@ -158,13 +159,7 @@ afterAll(async () => {
 }, 15_000);
 
 beforeEach((ctx) => {
-	ctx.onTestFailed(async () => {
-		await captureFailureArtifacts(
-			{ id: ctx.task.id, name: ctx.task.name },
-			obsidian,
-			{ plugin: qa, captureOnFailure: true },
-		);
-	});
+	registerFailureArtifacts(ctx, obsidian, { captureOnFailure: true }, qa);
 });
 
 // ---------------------------------------------------------------------------
@@ -188,6 +183,8 @@ describe("functional: file collision behaviors", () => {
 				templateChoice("__qa-test-t07-chain", `${root}/qa-t07-chain`, behavior.duplicateSuffix),
 				templateChoice("__qa-test-t08-digits", `${root}/qa-t08-note1`, behavior.duplicateSuffix),
 				templateChoice("__qa-test-t09-abot", `${root}/qa-t09-append-bot`, behavior.appendBottom),
+				templateChoice("__qa-test-t09b-abot-blank", `${root}/qa-t09b-append-bot-blank`, behavior.appendBottom),
+				templateChoice("__qa-test-t09c-abot-empty", `${root}/qa-t09c-append-bot-empty`, behavior.appendBottom),
 				templateChoice("__qa-test-t10-atop", `${root}/qa-t10-append-top`, behavior.appendTop),
 				templateChoice("__qa-test-t11-over", `${root}/qa-t11-overwrite`, behavior.overwrite),
 				templateChoice("__qa-test-t12-noop", `${root}/qa-t12-nothing`, behavior.doNothing),
@@ -248,14 +245,23 @@ describe("functional: file collision behaviors", () => {
 		expect(await sandbox.exists("qa-t08-note2.md")).toBe(false);
 	});
 
-	it("T09: append to bottom", async () => {
+	// #1958: exactly one blank line above the appended template, however the note ends.
+	it("T09: append to bottom of a note without a final line break", async () => {
 		await seedFile("qa-t09-append-bot.md", "ORIGINAL_BOTTOM_TEST");
 		const content = await runChoiceAndWaitForContent("__qa-test-t09-abot", "qa-t09-append-bot.md", TPL_CONTENT);
-		expectOrderedSubstrings(
-			content,
-			"ORIGINAL_BOTTOM_TEST",
-			TPL_CONTENT,
-		);
+		expect(content).toBe(`ORIGINAL_BOTTOM_TEST\n\n${TPL_CONTENT}`);
+	});
+
+	it("T09b: append to bottom of a note ending in blank lines", async () => {
+		await seedFile("qa-t09b-append-bot-blank.md", "ORIGINAL_BOTTOM_TEST\n\n\n");
+		const content = await runChoiceAndWaitForContent("__qa-test-t09b-abot-blank", "qa-t09b-append-bot-blank.md", TPL_CONTENT);
+		expect(content).toBe(`ORIGINAL_BOTTOM_TEST\n\n${TPL_CONTENT}`);
+	});
+
+	it("T09c: append to bottom of an empty note", async () => {
+		await seedFile("qa-t09c-append-bot-empty.md", "");
+		const content = await runChoiceAndWaitForContent("__qa-test-t09c-abot-empty", "qa-t09c-append-bot-empty.md", TPL_CONTENT);
+		expect(content).toBe(TPL_CONTENT);
 	});
 
 	it("T10: append to top", async () => {
@@ -322,6 +328,52 @@ describe("functional: file collision behaviors", () => {
 		await seedFile("tt0780504.md");
 		await runChoiceAndWaitFor("__qa-test-t15-dupid", "tt0780504 (1).md");
 		expect(await sandbox.exists("tt0780505 (1).md")).toBe(false);
+	});
+});
+
+describe("with Open off, only Open existing file opens the note (#2244)", () => {
+	const expected = {
+		increment: { file: "open-off-increment1.md", effect: "created", opens: false },
+		duplicateSuffix: { file: "open-off-duplicateSuffix (1).md", effect: "created", opens: false },
+		appendBottom: { file: "open-off-appendBottom.md", effect: "changed", opens: false },
+		appendTop: { file: "open-off-appendTop.md", effect: "changed", opens: false },
+		overwrite: { file: "open-off-overwrite.md", effect: "changed", opens: false },
+		doNothing: { file: "open-off-doNothing.md", effect: "unchanged", opens: true },
+		leaveUnchanged: { file: "open-off-leaveUnchanged.md", effect: "unchanged", opens: false },
+	} as const satisfies Record<Exclude<keyof typeof behavior, "prompt">, unknown>;
+	const modes = Object.keys(expected) as Array<keyof typeof expected>;
+
+	async function openSandboxNotes(): Promise<string[]> {
+		return obsidian.dev.evalJson<string[]>(`app.workspace.getLeavesOfType("markdown")
+			.map((leaf) => leaf.view.file?.path)
+			.filter((path) => path?.startsWith(${JSON.stringify(sandbox.path(""))}))`);
+	}
+
+	beforeAll(async () => {
+		await qa.data<QuickAddData>().patch((data) => {
+			clearTestChoices(data);
+			data.choices.push(
+				...modes.map((mode) =>
+					templateChoice(`__qa-test-open-off-${mode}`, `${sandbox.root}/open-off-${mode}`, behavior[mode]),
+				),
+			);
+		});
+		await qa.reload({ waitUntilReady: true });
+	}, 15_000);
+
+	beforeEach(async () => {
+		await obsidian.dev.eval(`app.workspace.getLeavesOfType("markdown")
+			.filter((leaf) => leaf.view.file?.path.startsWith(${JSON.stringify(sandbox.path(""))}))
+			.forEach((leaf) => leaf.detach())`);
+	});
+
+	it.each(modes)("%s", async (mode) => {
+		const { file, effect, opens } = expected[mode];
+		await seedFile(`open-off-${mode}.md`, "EXISTING");
+		const outcome = await obsidian.execJson("quickadd:run", { choice: `__qa-test-open-off-${mode}`, verify: true });
+		expect(outcome).toMatchObject({ ok: true, effect, file: sandbox.path(file) });
+		await obsidian.sleep(600);
+		expect(await openSandboxNotes()).toEqual(opens ? [sandbox.path(file)] : []);
 	});
 });
 

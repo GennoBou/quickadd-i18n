@@ -1,9 +1,12 @@
+import { expandGlobalVariables } from "src/formatters/helpers/globalVariables";
+import { unescapePipesInTokens } from "src/formatters/helpers/pipeEscapes";
+import { normalizeVaultPath } from "../utils/pathUtils";
 import type { App } from "obsidian";
 import {
 	DATE_VARIABLE_REGEX,
+	FIELD_VAR_REGEX_WITH_FILTERS,
 	FIELD_VARIABLE_PREFIX,
 	FILE_REGEX,
-	GLOBAL_VAR_REGEX,
 	MATH_VALUE_REGEX,
 	NAME_VALUE_REGEX,
 	TEMPLATE_REGEX,
@@ -21,72 +24,33 @@ import { NLDParser } from "src/parsers/NLDParser";
 import {
 	parseValueToken,
 	splitQuotedCommaList,
-	type NumericInputConfig,
-	type SliderConfig,
 	unwrapQuotedValue,
 } from "src/utils/valueSyntax";
 import { parseVDateOptions } from "src/utils/vdateSyntax";
-import { FieldSuggestionFileFilter } from "src/utils/FieldSuggestionFileFilter";
 import { FieldSuggestionParser } from "src/utils/FieldSuggestionParser";
 import { resolveActiveNoteFieldDefault } from "src/utils/activeNoteFieldDefault";
 import {
-	buildFileDisplayLabels,
+	buildFileDisplayInfos,
 	FILE_PICK_PREFIX,
 	type ParsedFileToken,
 	parseFileToken,
 } from "src/utils/fileSyntax";
+import { getFileTokenFiles } from "src/utils/vaultQueries";
 
-export type FieldType =
-	| "text"
-	| "number"
-	| "textarea"
-	| "dropdown"
-	| "slider"
-	| "date"
-	| "field-suggest"
-	| "file-picker"
-	| "suggester";
+export type { FieldRequirement, FieldGroup } from "./fieldRequirements";
+import type { FieldType, FieldRequirement } from "./fieldRequirements";
 
-export interface FieldRequirement {
-	id: string; // variable key or special input id
-	label: string; // user-facing label
-	type: FieldType;
-	description?: string;
-	placeholder?: string;
-	defaultValue?: string;
-	numericConfig?: NumericInputConfig;
-	sliderConfig?: SliderConfig;
-	options?: string[]; // for dropdowns and suggesters
-	displayOptions?: string[]; // visible labels for mapped VALUE lists
-	// Additional metadata
-	dateFormat?: string; // for VDATE
-	withTime?: boolean; // VDATE |time/|datetime: render a date AND time picker
-	multiEmit?: "text" | "linklist"; // |multi:linklist wraps picks as [[name]]
-	filters?: string; // serialized filters for FIELD variables
-	source?: "collected" | "script"; // provenance for UX badges
-	/**
-	 * True when ANY scanned occurrence of the variable sits in a path-context
-	 * string (file name format, folder path, capture target, insert-after/
-	 * before targets, template path). Sticky: one path usage disables
-	 * image paste for the field - an embed link in a path would corrupt it
-	 * (issue #1484). Content-only fields stay unset.
-	 */
-	pathContext?: boolean;
-	/** Prompt at runtime instead of the one-page form when the form has no safe widget. */
-	runtimeOnly?: boolean;
-	/** True only when EVERY scanned occurrence of the variable is |optional. */
-	optional?: boolean;
-	suggesterConfig?: {
-		allowCustomInput?: boolean;
-		caseSensitive?: boolean;
-		multiSelect?: boolean;
-	};
-	group?: FieldGroup;
-}
+const OPTION_LIST_LABEL_MAX = 30;
 
-export interface FieldGroup {
-	id: string;
-	label: string;
+/** "happy / sad"; whole options only, then "…" once past the limit. */
+function optionListLabel(options: string[]): string {
+	let label = options[0];
+	for (const option of options.slice(1)) {
+		const next = `${label} / ${option}`;
+		if (next.length > OPTION_LIST_LABEL_MAX) return `${label}…`;
+		label = next;
+	}
+	return label;
 }
 
 /**
@@ -153,7 +117,16 @@ export class RequirementCollector extends Formatter {
 	 * knows that much.
 	 */
 	private scanningScope: PromptScopeKind = "generic";
+	/** Set while scanning a One entry per line Capture's format: its {{VALUE}} takes several lines. */
+	public valueTakesLines = false;
 	private scanningSoleValue = false;
+	/**
+	 * Where each field first appears in the string being scanned. Dates, named
+	 * values and files are recorded by the passes below before the formatter
+	 * pass records the rest, so without this the form would list fields by
+	 * token type instead of in the order the format reads (#1876).
+	 */
+	private scanPositions = new Map<string, number>();
 
 	// Entry points -------------------------------------------------------------
 	public async scanString(
@@ -167,12 +140,18 @@ export class RequirementCollector extends Formatter {
 		this.scanningPathContext = pathContext;
 		this.scanningScope = scope;
 		this.scanningSoleValue = valueAnswersWholeScope(scope, input);
+		const known = new Set(this.requirements.keys());
+		this.scanPositions = new Map();
 		try {
 			// Expand global variables first so we can detect inner requirements
-			const expanded = await this.replaceGlobalVarInString(input);
-			// Run a safe formatting pass that collects variables but avoids side-effects
-			this.scanVariableTokens(expanded);
+			const expanded = unescapePipesInTokens(
+				await this.replaceGlobalVarInString(input),
+			);
+			// Run a safe formatting pass that collects variables but avoids side-effects.
+			// Dates first, as the run replaces VDATEs before named VALUEs: a
+			// {{VALUE:<name>}} reuse of a VDATE answer keeps the field a date.
 			this.scanDateTokens(expanded);
+			this.scanVariableTokens(expanded);
 			this.scanFileTokens(expanded);
 			// Anonymous {{VALUE}}/{{NAME}} and {{MVALUE}} resolutions are
 			// cached, so their prompt hooks fire once per collector; a path
@@ -191,11 +170,42 @@ export class RequirementCollector extends Formatter {
 				}
 			}
 			await this.format(expanded);
+			this.orderNewFieldsByPosition(known, expanded);
 		} finally {
 			this.scanningPathContext = previousContext;
 			this.scanningScope = previousScope;
 			this.scanningSoleValue = previousSoleValue;
 		}
+	}
+
+	/**
+	 * Lists the fields this string added in the order they first appear in it.
+	 * Fields from earlier strings (a file name, an earlier macro step) keep
+	 * their place ahead of them.
+	 */
+	private orderNewFieldsByPosition(known: Set<string>, input: string): void {
+		this.notePosition("value", input.search(NAME_VALUE_REGEX));
+		this.notePosition("mvalue", input.search(MATH_VALUE_REGEX));
+		const fieldTokens = new RegExp(FIELD_VAR_REGEX_WITH_FILTERS.source, "gi");
+		for (const match of input.matchAll(fieldTokens)) {
+			this.notePosition(
+				`${FIELD_VARIABLE_PREFIX}${match[1]}${match[2] ?? ""}`,
+				match.index,
+			);
+		}
+
+		const added = [...this.requirements].filter(([id]) => !known.has(id));
+		const position = (id: string) =>
+			this.scanPositions.get(id) ?? Number.MAX_SAFE_INTEGER;
+		added.sort(([a], [b]) => position(a) - position(b));
+		for (const [id] of added) this.requirements.delete(id);
+		for (const [id, requirement] of added) this.requirements.set(id, requirement);
+	}
+
+	private notePosition(id: string, index: number): void {
+		if (index < 0) return;
+		const seen = this.scanPositions.get(id);
+		if (seen === undefined || index < seen) this.scanPositions.set(id, index);
 	}
 
 	/** Sticky path-context marking: one path occurrence taints the field. */
@@ -241,7 +251,7 @@ export class RequirementCollector extends Formatter {
 			let m: RegExpExecArray | null;
 			while ((m = re.exec(output)) !== null) {
 				const path = m[1];
-				if (path) this.templatesToScan.add(path);
+				if (path) this.templatesToScan.add(normalizeVaultPath(path));
 			}
 		}
 
@@ -249,19 +259,7 @@ export class RequirementCollector extends Formatter {
 	}
 
 	protected async replaceGlobalVarInString(input: string): Promise<string> {
-		let output = input;
-		let guard = 0;
-		const re = new RegExp(GLOBAL_VAR_REGEX.source, "gi");
-		while (re.test(output)) {
-			if (++guard > 5) break;
-			output = output.replace(re, (_m, rawName) => {
-				const name = String(rawName ?? "").trim();
-				if (!name) return _m;
-				const snippet = this.plugin?.settings?.globalVariables?.[name];
-				return typeof snippet === "string" ? snippet : "";
-			});
-		}
-		return output;
+		return expandGlobalVariables(input, this.plugin?.settings?.globalVariables);
 	}
 
 	// Additional scanning for defaults/options in {{VALUE:...}} tokens
@@ -288,44 +286,39 @@ export class RequirementCollector extends Formatter {
 
 			if (!variableName) continue;
 
-			const displayLabel = hasOptions && label ? label : variableName;
-			const description = !hasOptions && label ? label : undefined;
+			// An option list's spec ("happy,sad") is its id, not a readable label.
+			const displayLabel =
+				label ??
+				(hasOptions
+					? (parsed.aliasName ??
+						optionListLabel(displayValues ?? parsed.suggestedValues))
+					: variableName);
 			const requirementId = variableKey;
+
+			// A VDATE with this name asks first at run time, which matches names
+			// case-insensitively, so this VALUE only reuses the date.
+			const reusedDate = this.findRequirementIgnoringCase(requirementId, "date");
+			this.notePosition(reusedDate?.id ?? requirementId, match.index);
+			if (reusedDate) {
+				this.markScanContext(reusedDate);
+				continue;
+			}
 
 			if (!this.requirements.has(requirementId)) {
 				// |type:checkbox renders a forced true/false dropdown and
 				// |type:number a numeric input, so the one-page form matches the
 				// runtime suggester/prompt (item #757).
-				const isCheckbox =
-					!hasOptions && parsed.inputTypeOverride === "checkbox";
-				const isNumber =
-					!hasOptions && parsed.inputTypeOverride === "number";
-				const isSlider =
-					!hasOptions && parsed.inputTypeOverride === "slider";
-				const baseInputType: FieldType =
-					parsed.inputTypeOverride === "multiline" ||
-					this.plugin.settings.inputPrompt === "multi-line"
-						? "textarea"
-						: "text";
+				const inputType = this.inputFieldType(parsed);
 				const req: FieldRequirement = {
 					id: requirementId,
 					label: displayLabel,
-					type: hasOptions
-						? this.optionFieldType(parsed)
-						: isCheckbox
-							? "dropdown"
-							: isNumber
-								? "number"
-								: isSlider
-									? "slider"
-									: baseInputType,
-					description,
+					type: hasOptions ? this.optionFieldType(parsed) : inputType,
 					optional: parsed.optional,
 				};
 				if (hasOptions) this.applyOptionFields(req, parsed);
-				else if (isCheckbox) req.options = ["true", "false"];
-				else if (isNumber) req.numericConfig = parsed.numericConfig;
-				else if (isSlider) {
+				else if (inputType === "dropdown") req.options = ["true", "false"];
+				else if (inputType === "number") req.numericConfig = parsed.numericConfig;
+				else if (inputType === "slider") {
 					req.numericConfig = parsed.numericConfig;
 					req.sliderConfig = parsed.sliderConfig;
 				}
@@ -369,6 +362,35 @@ export class RequirementCollector extends Formatter {
 				// AND rule: the field is optional only if every occurrence is.
 				existing.optional = (existing.optional ?? false) && parsed.optional;
 			}
+		}
+	}
+
+	/**
+	 * A named VALUE finds an earlier answer by its exact name, or else by the
+	 * one name that matches case-insensitively (two are ambiguous at run time).
+	 */
+	private findRequirementIgnoringCase(
+		key: string,
+		type: FieldType,
+	): FieldRequirement | undefined {
+		const exact = this.requirements.get(key);
+		if (exact) return exact.type === type ? exact : undefined;
+		const lower = key.toLowerCase();
+		const matches = [...this.requirements.values()].filter(
+			(req) => req.id.toLowerCase() === lower,
+		);
+		return matches.length === 1 && matches[0].type === type
+			? matches[0]
+			: undefined;
+	}
+
+	private inputFieldType(context?: Pick<PromptContext, "inputTypeOverride">): FieldType {
+		switch (context?.inputTypeOverride) {
+			case "checkbox": return "dropdown";
+			case "number": return "number";
+			case "slider": return "slider";
+			case "multiline": return "textarea";
+			default: return this.plugin.settings.inputPrompt === "multi-line" ? "textarea" : "text";
 		}
 	}
 
@@ -427,18 +449,20 @@ export class RequirementCollector extends Formatter {
 		while ((match = re.exec(input)) !== null) {
 			const variableName = match[1]?.trim();
 			if (!variableName) continue;
+			this.notePosition(variableName, match.index);
 
-			const { defaultValue, optional, withTime } = parseVDateOptions(
+			const { defaultValue, optional, withTime, label } = parseVDateOptions(
 				match[3],
 			);
 			const dateFormat =
 				match[2]?.trim() || (withTime ? "YYYY-MM-DD HH:mm" : "YYYY-MM-DD");
 
+			// A VDATE finds an earlier answer by its exact name at run time.
 			const existing = this.requirements.get(variableName);
 			if (!existing) {
 				this.requirements.set(variableName, {
 					id: variableName,
-					label: variableName,
+					label: label ?? variableName,
 					type: "date",
 					defaultValue,
 					dateFormat,
@@ -447,6 +471,17 @@ export class RequirementCollector extends Formatter {
 					source: "collected",
 				});
 			} else {
+				// A plain {{VALUE:<name>}} seen first, say in the file name, is
+				// answered with text that this VDATE then parses: ask for a date.
+				if (
+					(existing.type === "text" || existing.type === "textarea") &&
+					!this.hasOptionList(existing)
+				) {
+					existing.type = "date";
+					existing.dateFormat = dateFormat;
+					existing.withTime = withTime;
+					if (label) existing.label = label;
+				}
 				// Only backfill date metadata onto date requirements — a
 				// same-name VALUE requirement must not inherit a VDATE default.
 				if (
@@ -470,36 +505,27 @@ export class RequirementCollector extends Formatter {
 	protected async promptForValue(header?: string): Promise<string> {
 		const key = "value";
 		if (!this.requirements.has(key)) {
-			const isCheckbox =
-				this.valuePromptContext?.inputTypeOverride === "checkbox";
-			const isNumber =
-				this.valuePromptContext?.inputTypeOverride === "number";
-			const isSlider =
-				this.valuePromptContext?.inputTypeOverride === "slider";
+			// A |type: on the token wins over One entry per line.
+			const type = this.valueTakesLines && !this.valuePromptContext?.inputTypeOverride
+				? "textarea"
+				: this.inputFieldType(this.valuePromptContext);
 			const derived = describeValuePrompt(
 				this.scanningScope,
 				this.scanningSoleValue,
 			);
 			this.requirements.set(key, {
 				id: key,
-				label: derived.title || header || "Enter value",
-				type:
-					isCheckbox
-						? "dropdown"
-						: isNumber
-							? "number"
-							: isSlider
-								? "slider"
-								: this.valuePromptContext?.inputTypeOverride === "multiline" ||
-									  this.plugin.settings.inputPrompt === "multi-line"
-						? "textarea"
-						: "text",
-				description: this.valuePromptContext?.description,
+				label:
+					this.valuePromptContext?.label ||
+					derived.title ||
+					header ||
+					"Enter value",
+				type,
 				placeholder: derived.placeholder,
 				defaultValue: this.valuePromptContext?.defaultValue,
 				numericConfig: this.valuePromptContext?.numericConfig,
 				sliderConfig: this.valuePromptContext?.sliderConfig,
-				options: isCheckbox ? ["true", "false"] : undefined,
+				options: type === "dropdown" ? ["true", "false"] : undefined,
 				source: "collected",
 				optional: this.valuePromptContext?.optional,
 			});
@@ -538,35 +564,18 @@ export class RequirementCollector extends Formatter {
 				.map((s) => s.trim())
 				.filter(Boolean);
 			const hasOptions = optionValues.length > 1;
-			const isNumber = !hasOptions && context?.inputTypeOverride === "number";
-			const isSlider = !hasOptions && context?.inputTypeOverride === "slider";
-			const isCheckbox =
-				!hasOptions && context?.inputTypeOverride === "checkbox";
-			const baseInputType =
-				context?.inputTypeOverride === "multiline" ||
-				this.plugin.settings.inputPrompt === "multi-line"
-					? "textarea"
-					: "text";
+			const type = hasOptions ? "dropdown" : this.inputFieldType(context);
 			const req: FieldRequirement = {
 				id: key,
-				label: variableName,
-				type: hasOptions
-					? "dropdown"
-					: isCheckbox
-						? "dropdown"
-						: isNumber
-							? "number"
-							: isSlider
-								? "slider"
-								: baseInputType,
-				description: context?.description,
+				label: context?.label ?? variableName,
+				type,
 				numericConfig: context?.numericConfig,
 				sliderConfig: context?.sliderConfig,
 				source: "collected",
 			};
 			if (hasOptions) {
 				req.options = optionValues;
-			} else if (isCheckbox) {
+			} else if (type === "dropdown") {
 				req.options = ["true", "false"];
 			}
 			if (context?.defaultValue) req.defaultValue = context.defaultValue;
@@ -603,7 +612,7 @@ export class RequirementCollector extends Formatter {
 		if (!this.requirements.has(key)) {
 			const requirement: FieldRequirement = {
 				id: key,
-				label: parsed.fieldName || variableName,
+				label: parsed.label ?? (parsed.fieldName || variableName),
 				type: "field-suggest",
 				source: "collected",
 				runtimeOnly: parsed.multiSelect,
@@ -650,6 +659,7 @@ export class RequirementCollector extends Formatter {
 		while ((match = re.exec(input)) !== null) {
 			const parsed = parseFileToken(match[1] ?? "");
 			if (!parsed) continue;
+			this.notePosition(parsed.variableKey, match.index);
 			this.recordFileRequirement(parsed);
 		}
 	}
@@ -681,28 +691,26 @@ export class RequirementCollector extends Formatter {
 		// Options are the folder's files encoded as `@file:<path>` (display =
 		// basenames) so the chosen value round-trips to the runtime formatter,
 		// which decodes it back to the file.
-		const files = FieldSuggestionFileFilter.filterFiles(
-			this.app.vault.getMarkdownFiles(),
-			parsed.filter,
-			(file) => this.app.metadataCache.getFileCache(file),
-		);
+		const files = getFileTokenFiles(this.app, parsed);
 		const options = files.map((file) => `${FILE_PICK_PREFIX}${file.path}`);
-		const displayOptions = buildFileDisplayLabels(
+		const infos = buildFileDisplayInfos(
 			files,
 			(file) => this.app.metadataCache.getFileCache(file),
 		);
+		const displayOptions = infos.map((info) => info.label);
 		// The dedicated picker keeps display labels separate from the encoded file
 		// paths, so both single and multi FILE tokens can search inline without the
 		// comma serialization that made multi-select runtime-only. Preserve the
 		// previous empty-folder one-page behavior by permitting a literal value when
 		// no real file options exist.
 		const allowCustomInput = parsed.allowCustomInput || options.length === 0;
-		// Disambiguate same-scope tokens that differ only by mode (e.g. a basename
-		// and a link to the same folder) when no explicit |label.
-		const autoLabel =
-			parsed.mode === "name"
-				? `File from ${parsed.folderPath}`
-				: `File from ${parsed.folderPath} (${parsed.mode})`;
+		// Disambiguate same-folder tokens that differ only by type or mode (e.g. an
+		// image and a PDF link from one folder) when no explicit |label.
+		const qualifiers = [...parsed.types];
+		if (parsed.mode !== "name") qualifiers.push(parsed.mode);
+		const autoLabel = qualifiers.length
+			? `File from ${parsed.folderPath} (${qualifiers.join(", ")})`
+			: `File from ${parsed.folderPath}`;
 		this.requirements.set(key, {
 			id: key,
 			label: parsed.label ?? autoLabel,
@@ -710,6 +718,7 @@ export class RequirementCollector extends Formatter {
 			source: "collected",
 			options,
 			displayOptions,
+			optionAliases: infos.map((info) => info.aliases),
 			optional: parsed.optional,
 			suggesterConfig: {
 				allowCustomInput,
