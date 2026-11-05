@@ -1,5 +1,6 @@
-import { type App, Notice, SettingGroup, SettingPage } from "obsidian";
+﻿import { type App, Notice, SettingGroup, SettingPage } from "obsidian";
 import { openSettingPage, retitleSettingPage } from "../../utils/openPluginSettings";
+import { t } from "../../i18n";
 
 /**
  * A builder shown as a page of Settings → QuickAdd, pushed onto Obsidian's
@@ -34,7 +35,11 @@ export abstract class BuilderPage<T> extends SettingPage {
 	open(): boolean {
 		this.opener = openerOf(activeDocument.activeElement);
 		if (openSettingPage(this.app, this)) return true;
-		new Notice(`QuickAdd: Couldn't open the settings for “${this.title}”.`);
+		new Notice(
+			t("QuickAdd: Couldn't open the settings for “{title}”.", {
+				title: this.title,
+			}),
+		);
 		return false;
 	}
 
@@ -83,7 +88,7 @@ export abstract class BuilderPage<T> extends SettingPage {
 		onChange: (name: string) => void,
 	): SettingGroup {
 		return new SettingGroup(containerEl).addSetting((setting) => {
-			setting.setName("Name").addText((text) => {
+			setting.setName(t("Name")).addText((text) => {
 				text.setValue(name).onChange((value) => {
 					onChange(value);
 					retitleSettingPage(this.app, this, value.trim() || fallback);

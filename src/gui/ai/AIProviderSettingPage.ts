@@ -8,6 +8,7 @@ import {
 	describeConnectionResult,
 	testProviderConnection,
 } from "src/ai/providerConnection";
+import { t } from "src/i18n";
 import { settingsStore } from "src/settingsStore";
 import { retitleSettingPage } from "src/utils/openPluginSettings";
 import GenericInputPrompt from "../GenericInputPrompt/GenericInputPrompt";
@@ -25,11 +26,11 @@ import { countModels, describeSyncStatus } from "./syncStatus";
 function describeModelSource(provider: Pick<AIProvider, "modelSource">): string {
 	switch (provider.modelSource ?? "providerApi") {
 		case "modelsDev":
-			return "the models.dev directory";
+			return t("the models.dev directory");
 		case "auto":
-			return "the provider's models endpoint (falls back to models.dev)";
+			return t("the provider's models endpoint (falls back to models.dev)");
 		default:
-			return "the provider's models endpoint";
+			return t("the provider's models endpoint");
 	}
 }
 
@@ -46,14 +47,20 @@ function setStatusLine(
 
 /** "Context: 128,000 tokens · Output: … · Released 2024-05-13". */
 function describeModel(model: Model): string {
-	const parts = [`Context: ${model.maxTokens.toLocaleString()} tokens`];
+	const parts = [
+		t("Context: {count} tokens", { count: model.maxTokens.toLocaleString() }),
+	];
 	if (model.maxOutputTokens) {
-		parts.push(`Output: ${model.maxOutputTokens.toLocaleString()} tokens`);
+		parts.push(
+			t("Output: {count} tokens", {
+				count: model.maxOutputTokens.toLocaleString(),
+			}),
+		);
 	}
 	if (model.supportsTemperature === false) {
-		parts.push("Fixed sampling (no temperature)");
+		parts.push(t("Fixed sampling (no temperature)"));
 	}
-	if (model.releaseDate) parts.push(`Released ${model.releaseDate}`);
+	if (model.releaseDate) parts.push(t("Released {date}", { date: model.releaseDate }));
 	return parts.join(" · ");
 }
 
@@ -89,7 +96,7 @@ export class AIProviderSettingPage extends SettingPage {
 		if (!provider) {
 			this.containerEl.createDiv({
 				cls: "setting-item-description",
-				text: "This provider no longer exists.",
+				text: t("This provider no longer exists."),
 			});
 			return;
 		}
@@ -169,24 +176,27 @@ export class AIProviderSettingPage extends SettingPage {
 
 		group.addSetting((setting) => {
 			setting
-				.setName("Name")
+				.setName(t("Name"))
 				.setDesc(
 					provider.id
-						? `ID: ${provider.id}. Scripts can address this provider's models as "${provider.id}/model-name".`
-						: "The display name of the provider.",
+						? t(
+								"ID: {id}. Scripts can address this provider's models as \"{id}/model-name\".",
+								{ id: provider.id },
+						  )
+						: t("The display name of the provider."),
 				)
 				.addText((text) => {
 					text.setValue(provider.name).onChange((value) => {
 						this.edit((p) => ({ ...p, name: value }));
-						retitleSettingPage(this.app, this, value.trim() || "Untitled provider");
+						retitleSettingPage(this.app, this, value.trim() || t("Untitled provider"));
 					});
 				});
 		});
 
 		group.addSetting((setting) => {
 			setting
-				.setName("Endpoint")
-				.setDesc("The base URL of the provider's API.")
+				.setName(t("Endpoint"))
+				.setDesc(t("The base URL of the provider's API."))
 				.addText((text) => {
 					text.setPlaceholder("https://api.example.com/v1");
 					text.setValue(provider.endpoint).onChange((value) => {
@@ -197,15 +207,17 @@ export class AIProviderSettingPage extends SettingPage {
 
 		group.addSetting((setting) => {
 			setting
-				.setName("Provider type")
+				.setName(t("Provider type"))
 				.setDesc(
-					"The request format this provider expects. Auto-detect recognizes the official Anthropic and Gemini endpoints and treats everything else as OpenAI-compatible; pick a type explicitly for a proxy or custom endpoint.",
+					t(
+						"The request format this provider expects. Auto-detect recognizes the official Anthropic and Gemini endpoints and treats everything else as OpenAI-compatible; pick a type explicitly for a proxy or custom endpoint.",
+					),
 				)
 				.addDropdown((dropdown) => {
-					dropdown.addOption("", "Auto-detect");
-					dropdown.addOption("openai", "OpenAI-compatible");
-					dropdown.addOption("anthropic", "Anthropic");
-					dropdown.addOption("gemini", "Gemini");
+					dropdown.addOption("", t("Auto-detect"));
+					dropdown.addOption("openai", t("OpenAI-compatible"));
+					dropdown.addOption("anthropic", t("Anthropic"));
+					dropdown.addOption("gemini", t("Gemini"));
 					dropdown.setValue(provider.kind ?? "");
 					dropdown.onChange((value) => {
 						this.editConnection((p) => ({
@@ -228,18 +240,20 @@ export class AIProviderSettingPage extends SettingPage {
 
 		group.addSetting((setting) => {
 			setting
-				.setName("Connection")
+				.setName(t("Connection"))
 				.setDesc(
-					"Check that QuickAdd can reach this provider's models endpoint with the linked key.",
+					t(
+						"Check that QuickAdd can reach this provider's models endpoint with the linked key.",
+					),
 				);
 			const resultEl = setting.descEl.createDiv({ cls: "qa-ai-status-line" });
 			this.connectionResultEl = resultEl;
 			setting.addButton((button) => {
-				button.setButtonText("Test connection").onClick(async () => {
+				button.setButtonText(t("Test connection")).onClick(async () => {
 					const current = this.provider;
 					if (!current) return;
 					button.setDisabled(true);
-					setStatusLine(resultEl, "Testing…");
+					setStatusLine(resultEl, t("Testing…"));
 					try {
 						const result = await testProviderConnection(this.app, current);
 						setStatusLine(
@@ -257,16 +271,16 @@ export class AIProviderSettingPage extends SettingPage {
 
 	private renderModelSyncGroup(provider: AIProvider): void {
 		const source = describeModelSource(provider);
-		const group = new SettingGroup(this.containerEl).setHeading("Model sync");
+		const group = new SettingGroup(this.containerEl).setHeading(t("Model sync"));
 
 		group.addSetting((setting) => {
 			setting
-				.setName("Model source")
-				.setDesc("Where QuickAdd looks when browsing or syncing models for this provider.")
+				.setName(t("Model source"))
+				.setDesc(t("Where QuickAdd looks when browsing or syncing models for this provider."))
 				.addDropdown((dropdown) => {
-					dropdown.addOption("providerApi", "Provider models endpoint (requires API key)");
-					dropdown.addOption("modelsDev", "models.dev directory");
-					dropdown.addOption("auto", "Automatic (try provider, fall back to models.dev)");
+					dropdown.addOption("providerApi", t("Provider models endpoint (requires API key)"));
+					dropdown.addOption("modelsDev", t("models.dev directory"));
+					dropdown.addOption("auto", t("Automatic (try provider, fall back to models.dev)"));
 					dropdown.setValue(provider.modelSource ?? "providerApi");
 					dropdown.onChange((value) => {
 						this.editConnection((p) => ({
@@ -281,9 +295,12 @@ export class AIProviderSettingPage extends SettingPage {
 
 		group.addSetting((setting) => {
 			setting
-				.setName("Auto-sync models")
+				.setName(t("Auto-sync models"))
 				.setDesc(
-					`Import new models and refreshed context limits from ${source} once a day and when this page opens.`,
+					t(
+						"Import new models and refreshed context limits from {source} once a day and when this page opens.",
+						{ source },
+					),
 				);
 			this.syncStatusEl = setting.descEl.createDiv({ cls: "qa-ai-status-line" });
 			this.renderSyncStatus();
@@ -294,16 +311,16 @@ export class AIProviderSettingPage extends SettingPage {
 					});
 				})
 				.addButton((button) => {
-					button.setButtonText("Sync now").onClick(() => this.syncNow(button));
+					button.setButtonText(t("Sync now")).onClick(() => this.syncNow(button));
 				});
 		});
 
 		group.addSetting((setting) => {
 			setting
-				.setName("Browse models")
-				.setDesc(`Pick models to import from ${source}.`)
+				.setName(t("Browse models"))
+				.setDesc(t("Pick models to import from {source}.", { source }))
 				.addButton((button) => {
-					button.setButtonText("Browse…").onClick(() => this.browseModels());
+					button.setButtonText(t("Browse…")).onClick(() => this.browseModels());
 				});
 		});
 	}
@@ -330,11 +347,19 @@ export class AIProviderSettingPage extends SettingPage {
 			);
 			new Notice(
 				counts.added > 0 || counts.updated > 0
-					? `Synced from ${source}: ${counts.added} new, ${counts.updated} updated.`
-					: `Synced from ${source}: already up to date.`,
+					? t("Synced from {source}: {added} new, {updated} updated.", {
+							source,
+							added: counts.added,
+							updated: counts.updated,
+					  })
+					: t("Synced from {source}: already up to date.", { source }),
 			);
 		} catch (err) {
-			new Notice(`Sync failed: ${(err as { message?: string }).message ?? String(err)}`);
+			new Notice(
+				t("Sync failed: {error}", {
+					error: (err as { message?: string }).message ?? String(err),
+				}),
+			);
 		} finally {
 			button.setDisabled(false);
 		}
@@ -353,7 +378,11 @@ export class AIProviderSettingPage extends SettingPage {
 			models: mode === "replace" ? imported : mergeModels(p.models, imported),
 		}));
 		new Notice(
-			`Imported ${countModels(imported.length)}${mode === "replace" ? " (replaced the list)" : ""}.`,
+			mode === "replace"
+				? t("Imported {count} (replaced the list).", {
+						count: countModels(imported.length),
+				  })
+				: t("Imported {count}.", { count: countModels(imported.length) }),
 		);
 	}
 
@@ -361,11 +390,11 @@ export class AIProviderSettingPage extends SettingPage {
 		// mod-list: Obsidian's compact style for collections (as in Keychain),
 		// which also keeps each row's delete button inline on phones.
 		const group = new SettingGroup(this.containerEl)
-			.setHeading("Models")
+			.setHeading(t("Models"))
 			.addClass("mod-list", "qa-ai-models-group");
 		group.addSearch((search) => {
 			search
-				.setPlaceholder("Filter models")
+				.setPlaceholder(t("Filter models"))
 				.setValue(this.modelFilter)
 				.onChange((value) => {
 					this.modelFilter = value;
@@ -375,7 +404,7 @@ export class AIProviderSettingPage extends SettingPage {
 		group.addExtraButton((button) => {
 			button
 				.setIcon("plus")
-				.setTooltip("Add model")
+				.setTooltip(t("Add model"))
 				.onClick(() => void this.addModel());
 		});
 		this.modelListEl = group.listEl;
@@ -395,15 +424,23 @@ export class AIProviderSettingPage extends SettingPage {
 			// confirmation is open must not widen what gets removed.
 			const retiredNames = new Set(retired.map((model) => model.name));
 			const setting = new Setting(listEl)
-				.setName(`${countModels(retired.length)} retired by the provider`)
+				.setName(t("{count} retired by the provider", { count: countModels(retired.length) }))
 				.setDesc(
-					"Requests to them may fail. Commands that use them need another model.",
+					t(
+						"Requests to them may fail. Commands that use them need another model.",
+					),
 				)
 				.addButton((button) => {
-					button.setButtonText("Remove retired").onClick(async () => {
+					button.setButtonText(t("Remove retired")).onClick(async () => {
 						const confirmed = await confirmAction(this.app, {
-							title: `Remove ${countModels(retiredNames.size)} retired by the provider from ${provider.name}?`,
-							action: "Remove",
+							title: t(
+								"Remove {count} retired by the provider from {name}?",
+								{
+									count: countModels(retiredNames.size),
+									name: provider.name,
+								},
+							),
+							action: t("Remove"),
 						});
 						if (!confirmed) return;
 						this.edit((p) => ({
@@ -424,8 +461,8 @@ export class AIProviderSettingPage extends SettingPage {
 			new Setting(listEl)
 				.setName(
 					query
-						? `No models match "${this.modelFilter.trim()}".`
-						: "No models yet. Sync, browse, or add one.",
+						? t('No models match "{query}".', { query: this.modelFilter.trim() })
+						: t("No models yet. Sync, browse, or add one."),
 				)
 				.settingEl.addClass("mod-empty-state");
 			return;
@@ -434,12 +471,12 @@ export class AIProviderSettingPage extends SettingPage {
 		for (const model of shown) {
 			const setting = new Setting(listEl).setName(model.name).setDesc(describeModel(model));
 			if (model.deprecated) {
-				setting.nameEl.createSpan({ cls: "qa-ai-model-badge", text: "Retired" });
+				setting.nameEl.createSpan({ cls: "qa-ai-model-badge", text: t("Retired") });
 			}
 			setting.addExtraButton((button) => {
 				button
 					.setIcon("trash-2")
-					.setTooltip("Delete model")
+					.setTooltip(t("Delete model"))
 					.onClick(() => void this.deleteModel(model.name));
 			});
 		}
@@ -447,8 +484,8 @@ export class AIProviderSettingPage extends SettingPage {
 
 	private async deleteModel(name: string): Promise<void> {
 		const confirmed = await confirmAction(this.app, {
-			title: `Delete ${name}?`,
-			action: "Delete",
+			title: t("Delete {name}?", { name }),
+			action: t("Delete"),
 		});
 		if (!confirmed) return;
 		// By name: a sync may have replaced the model objects meanwhile.
@@ -462,8 +499,8 @@ export class AIProviderSettingPage extends SettingPage {
 		let modelName: string;
 		let maxTokens: string;
 		try {
-			modelName = await GenericInputPrompt.Prompt(this.app, "Model name");
-			maxTokens = await GenericInputPrompt.Prompt(this.app, "Context window (tokens)");
+			modelName = await GenericInputPrompt.Prompt(this.app, t("Model name"));
+			maxTokens = await GenericInputPrompt.Prompt(this.app, t("Context window (tokens)"));
 		} catch {
 			// Cancelling either prompt is a clean no-op.
 			return;
@@ -471,7 +508,7 @@ export class AIProviderSettingPage extends SettingPage {
 
 		const name = modelName.trim();
 		if (!name) {
-			new Notice("Model name cannot be empty.");
+			new Notice(t("Model name cannot be empty."));
 			return;
 		}
 		// Reject non-numeric input outright: parseInt would silently accept
@@ -480,11 +517,11 @@ export class AIProviderSettingPage extends SettingPage {
 		// Past 2^53 a digit string no longer parses to itself (and a long one
 		// to Infinity, which data.json stores as null).
 		if (!/^[1-9]\d*$/.test(tokens) || !Number.isSafeInteger(Number(tokens))) {
-			new Notice("The context window must be a positive whole number.");
+			new Notice(t("The context window must be a positive whole number."));
 			return;
 		}
 		if (this.provider?.models.some((model) => model.name === name)) {
-			new Notice(`${name} is already in the list.`);
+			new Notice(t("{name} is already in the list.", { name }));
 			return;
 		}
 
@@ -507,20 +544,22 @@ export class AIProviderSettingPage extends SettingPage {
 	private renderDeleteGroup(): void {
 		new SettingGroup(this.containerEl).addSetting((setting) => {
 			setting
-				.setName("Delete provider")
-				.setDesc("Commands that use its models will need another model.")
+				.setName(t("Delete provider"))
+				.setDesc(t("Commands that use its models will need another model."))
 				.addButton((button) => {
 					button
-						.setButtonText("Delete")
+						.setButtonText(t("Delete"))
 						.setDestructive()
 						.setCta()
 						.onClick(async () => {
 							const provider = this.provider;
 							if (!provider) return;
 							const confirmed = await confirmAction(this.app, {
-								title: `Delete ${provider.name.trim() || "this provider"}?`,
-								message: "Commands that use its models will need another model.",
-								action: "Delete",
+								title: t("Delete {name}?", {
+									name: provider.name.trim() || t("this provider"),
+								}),
+								message: t("Commands that use its models will need another model."),
+								action: t("Delete"),
 							});
 							if (!confirmed) return;
 							removeProvider(this.providerId);

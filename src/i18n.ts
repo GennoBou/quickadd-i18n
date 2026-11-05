@@ -30,6 +30,17 @@ let customTranslations: Record<string, TranslationDict> = {};
  * Detect current Obsidian locale
  */
 export function getObsidianLocale(): string {
+    // 0. Default to 'en' in automated test environments unless explicitly set in localStorage
+    if (typeof process !== "undefined" && (process.env?.VITEST || process.env?.NODE_ENV === "test")) {
+        try {
+            const storedLang = typeof window !== "undefined" ? window.localStorage?.getItem("language") : null;
+            if (storedLang) return storedLang.toLowerCase();
+        } catch {
+            // ignore
+        }
+        return "en";
+    }
+
     // 1. Check window.localStorage (Obsidian's language setting key)
     try {
         const storedLang = window.localStorage.getItem("language");

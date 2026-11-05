@@ -1,5 +1,6 @@
 import type { App } from "obsidian";
 import { SecretComponent, Setting } from "obsidian";
+import { t } from "src/i18n";
 
 interface ProviderSecretOptions {
 	value: string;
@@ -22,11 +23,15 @@ export function configureProviderSecret(
 	options: ProviderSecretOptions,
 ): Setting {
 	return setting
-		.setName("API key")
-		.setDesc(options.hasLegacyKey
-			? "A legacy API key is stored in plain text. Link a keychain secret to replace it."
-			: "Link a secret from Settings → Keychain.")
-		.addComponent((el) => new SecretComponent(app, el)
-			.setValue(options.value)
-			.onChange(options.onChange));
+		.setName(t("API key"))
+		.setDesc(
+			options.hasLegacyKey
+				? t("A legacy API key is stored in plain text. Link a keychain secret to replace it.")
+				: t("Link a secret from Settings → Keychain."),
+		)
+		.addComponent((el) =>
+			new SecretComponent(app, el)
+				.setValue(options.value)
+				.onChange(options.onChange),
+		);
 }

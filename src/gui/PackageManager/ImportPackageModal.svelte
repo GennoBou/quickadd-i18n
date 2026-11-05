@@ -127,11 +127,17 @@
 		if (!s) return "";
 		const parts: string[] = [];
 		if (s.added)
-			parts.push(t("{count} choices added", { count: s.added }));
+			parts.push(
+				s.added === 1
+					? t("1 choice added")
+					: t("{count} choices added", { count: s.added }),
+			);
 		if (s.overwritten) parts.push(t("{count} overwritten", { count: s.overwritten }));
 		if (s.assetsWritten)
 			parts.push(
-				t("{count} files written", { count: s.assetsWritten }),
+				s.assetsWritten === 1
+					? t("1 file written")
+					: t("{count} files written", { count: s.assetsWritten }),
 			);
 		const skipped = s.skipped + s.assetsSkipped;
 		if (skipped) parts.push(t("{count} skipped", { count: skipped }));
@@ -205,7 +211,9 @@
 	const blockedReason = $derived.by(() => {
 		if (!loadedPackage || !analysis || isAnalyzing || hasImported) return "";
 		if (requiresAck && !fullyReviewed)
-			return t("View {count} scripts above to import.", { count: unreviewedCount });
+			return unreviewedCount === 1
+				? t("View 1 script above to import.")
+				: t("View {count} scripts above to import.", { count: unreviewedCount });
 		if (requiresAck && !acknowledged)
 			return t("Confirm the acknowledgement above to import.");
 		if (fileRows.some((row) => row.destinationIsFolder))

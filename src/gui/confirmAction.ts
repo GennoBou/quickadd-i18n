@@ -1,4 +1,5 @@
-import { type App, ConfirmationModal } from "obsidian";
+﻿import { type App, ConfirmationModal } from "obsidian";
+import { t } from "../i18n";
 
 type ConfirmActionOptions = {
 	title: string;
@@ -21,11 +22,11 @@ export function confirmAction(
 	return new Promise((resolve) => {
 		let confirmed = false;
 		const modal = new ConfirmationModal(app);
-		modal.setTitle(title);
-		if (message) modal.setContent(message);
+		modal.setTitle(t(title));
+		if (message) modal.setContent(t(message));
 		modal.addCancelButton().addButton((button) => {
 			button
-				.setButtonText(action)
+				.setButtonText(t(action))
 				.setCta()
 				.setInitialFocus()
 				.onClick(() => {

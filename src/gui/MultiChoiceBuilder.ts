@@ -1,7 +1,8 @@
-import type { App } from "obsidian";
+﻿import type { App } from "obsidian";
 import type IMultiChoice from "../types/choices/IMultiChoice";
 import { addChoiceIconSetting } from "./ChoiceBuilder/components/choiceIconSetting";
 import { BuilderPage, nameOrFallback } from "./ChoiceBuilder/builderPage";
+import { t } from "../i18n";
 
 /** A folder's settings, as a page of Settings → QuickAdd. */
 export class MultiChoiceBuilder extends BuilderPage<IMultiChoice> {
@@ -29,9 +30,11 @@ export class MultiChoiceBuilder extends BuilderPage<IMultiChoice> {
 		});
 		group.addSetting((setting) => {
 			setting
-				.setName("Placeholder")
+				.setName(t("Placeholder"))
 				.setDesc(
-					"Shown in the choice picker search box when this folder opens. Leave blank to use the folder name.",
+					t(
+						"Shown in the choice picker search box when this folder opens. Leave blank to use the folder name.",
+					),
 				)
 				.addText((text) => {
 					setPlaceholderHint = (hint) => {
