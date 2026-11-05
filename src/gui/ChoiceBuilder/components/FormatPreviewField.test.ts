@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/svelte";
 import { tick } from "svelte";
@@ -7,17 +8,6 @@ import FormatPreviewField from "./FormatPreviewField.svelte";
 import type QuickAdd from "../../../main";
 import { LogManager } from "../../../logger/logManager";
 import type { ILogger } from "../../../logger/ilogger";
-
-// SingleTemplateEngine's module graph pulls obsidian-dataview's CJS require; the
-// preview no longer uses it, but FileNameDisplayFormatter's siblings still
-// import through the same barrel in this environment.
-vi.mock("../../../engine/SingleTemplateEngine", () => ({
-	SingleTemplateEngine: class {
-		run(): Promise<string> {
-			return Promise.resolve("");
-		}
-	},
-}));
 
 const app = {
 	workspace: { getActiveFile: () => null },

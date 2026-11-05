@@ -1,52 +1,46 @@
 import type { App } from "obsidian";
 import { normalizePath } from "obsidian";
-import { v4 as uuidv4 } from "uuid";
-import type IChoice from "../types/choices/IChoice";
-import type IMultiChoice from "../types/choices/IMultiChoice";
-import type IMacroChoice from "../types/choices/IMacroChoice";
-import type ITemplateChoice from "../types/choices/ITemplateChoice";
-import type ICaptureChoice from "../types/choices/ICaptureChoice";
-import type { QuickAddPackage } from "../types/packages/QuickAddPackage";
-import {
-	isQuickAddPackage,
-	QUICKADD_PACKAGE_SCHEMA_VERSION,
-} from "../types/packages/QuickAddPackage";
-import {
-	childChoicesOf,
-	flattenChoices,
-	hasUnreadableChildren,
-	isChoiceLike,
-} from "../utils/choiceUtils";
-import {
-	commandListOf,
-	isCommandLike,
-	isMacroObject,
-	macroCommandsValueOf,
-} from "../utils/macroUtils";
-import type { ICommand } from "../types/macros/ICommand";
-import type { IChoiceCommand } from "../types/macros/IChoiceCommand";
-import type { IConditionalCommand } from "../types/macros/Conditional/IConditionalCommand";
-import type { INestedChoiceCommand } from "../types/macros/QuickCommands/INestedChoiceCommand";
-import type { IUserScript } from "../types/macros/IUserScript";
-import { CommandType } from "../types/macros/CommandType";
+import { normalizeVaultPath } from "../utils/pathUtils";
+import { uuidv4 } from "../utils/uuid";
 import type { AIProvider } from "../ai/Provider";
 import { pinAiCommandModelRefs } from "../ai/modelRefPinning";
 import { log } from "../logger/logManager";
+import type IChoice from "../types/choices/IChoice";
+import type IMultiChoice from "../types/choices/IMultiChoice";
+import type { QuickAddPackage } from "../types/packages/QuickAddPackage";
+import { MARKDOWN_FILE_EXTENSION_REGEX } from "../constants";
 import { decodeFromBase64 } from "../utils/base64";
+import {
+	flattenChoices,
+	isChoiceLike
+} from "../utils/choiceUtils";
 import { deepClone } from "../utils/deepClone";
 import { ensureParentFolders } from "../utils/ensureParentFolders";
+import { extractScriptFromMarkdown } from "../utils/extractScriptFromMarkdown";
+import { hasTemplateExtension } from "../utils/templateFolderUtils";
+import { rewriteTemplateIncludes } from "../utils/templateIncludes";
+import { escapesVaultBoundary, isWritableAssetDestination } from "../utils/vaultPathBoundary";
 import { assertWriteStaysInVault } from "../utils/vaultWriteGuards";
-import { escapesVaultBoundary } from "../utils/vaultPathBoundary";
+import { packageSecretOptionNames } from "./packageAssets";
 import {
-	detectUserScriptSecretOptions,
-	stripUserScriptSecretRefsFromCommand,
-} from "../utils/userScriptSecrets";
-import type { UserScriptSecretSanitizerOptions } from "../utils/userScriptSecrets";
+	applyAssetPathOverrides,
+	findChoiceInTree,
+	findMultiByPath,
+	insertIntoMulti,
+	insertUnderParent,
+	isDirectChildOf,
+	mergeFolderChildren,
+	remapChoiceTree,
+	removeChoiceFromTree,
+	replaceChoiceInTree,
+} from "./packageChoiceImport";
+import type { PackagePreview } from "./packagePreview";
 import {
 	buildPackagePreview,
 	collectReferencedAssetPaths,
 } from "./packagePreview";
-import type { PackagePreview } from "./packagePreview";
+import { parseQuickAddPackage } from "./packageValidation";
+export { parseQuickAddPackage } from "./packageValidation";
 
 export interface LoadedQuickAddPackage {
 	pkg: QuickAddPackage;
@@ -115,13 +109,7 @@ export async function readQuickAddPackage(
 	app: App,
 	packagePath: string,
 ): Promise<LoadedQuickAddPackage> {
-	// Containment guard at the single read entry point, before any filesystem
-	// touch. `packagePath` is untrusted (the CLI `path=` flag, the GUI file
-	// picker): `normalizePath` collapses slashes but does NOT resolve "..", so a
-	// path like "../../../etc/passwd" (or an absolute/drive path) would otherwise
-	// reach `adapter.read` and disclose a file OUTSIDE the vault. The sibling
-	// analysePackage/analysePackagePreview probes already guard with this; the read
-	// path must too, so every current and future caller inherits the protection.
+	// Reject escaping input before touching the filesystem. normalizePath does not resolve "..".
 	if (escapesVaultBoundary(packagePath)) {
 		throw new Error(
 			`Refusing to read a package outside the vault: "${packagePath}".`,
@@ -141,235 +129,6 @@ export async function readQuickAddPackage(
 		pkg: parsed,
 		path: normalized,
 	};
-}
-
-export function parseQuickAddPackage(raw: string): QuickAddPackage {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch (error) {
-		throw new Error(
-			`Package content is not valid JSON: ${(error as Error)?.message ?? error}`,
-		);
-	}
-
-	if (!isQuickAddPackage(parsed)) {
-		throw new Error("Content is not a valid QuickAdd package.");
-	}
-
-	if (parsed.schemaVersion > QUICKADD_PACKAGE_SCHEMA_VERSION) {
-		throw new Error(
-			`Package schema version ${parsed.schemaVersion} is newer than this plugin supports (${QUICKADD_PACKAGE_SCHEMA_VERSION}).`,
-		);
-	}
-
-	// Reject duplicate asset paths at the untrusted-input boundary. The writer is
-	// last-write-wins per destination while the review pane resolves the FIRST
-	// match (decodeAssetPreview), so two assets at one path could show benign bytes
-	// in review while malicious bytes land on disk — a silent review-gate desync.
-	// Failing closed here keeps reviewed bytes identical to written bytes.
-	const duplicateAssetPath = findDuplicateAssetPath(parsed.assets);
-	if (duplicateAssetPath !== null) {
-		throw new Error(
-			`Package contains duplicate asset path "${duplicateAssetPath}". Each asset must have a unique path.`,
-		);
-	}
-
-	// Reject internally-inconsistent choices at the untrusted-input boundary. The
-	// same choice id can appear in MORE than one place in a package: as a flat
-	// `pkg.choices` entry AND inline inside a Multi's `choices` array (or as a
-	// NestedChoice/Conditional-branch embedded choice). The preview and the writer
-	// each pick ONE of those copies and assume the others are identical:
-	// buildPackagePreview's walk SKIPS an inline Multi child whose id is also an
-	// entry (trusting the entry's walk to cover it), while applyPackageImport's
-	// remapChoiceTree INSTALLS the inline copy and drops the standalone entry. A
-	// crafted package can make those copies DIVERGE — a benign top-level entry that
-	// the preview discloses, paired with a malicious inline child (e.g.
-	// runOnStartup:true) that actually installs — suppressing the capability
-	// disclosure and acknowledgement gate entirely. The structural validator
-	// (isQuickAddPackage) never checks this. A legitimately-exported package always
-	// clones every appearance of an id from one source choice, so all appearances
-	// are identical; divergence implies tampering. Fail closed so the copy the user
-	// reviews is provably the copy that installs.
-	const divergentChoiceId = findDivergentChoiceId(parsed.choices);
-	if (divergentChoiceId !== null) {
-		throw new Error(
-			`Package contains conflicting definitions for choice "${divergentChoiceId}". Each choice id must describe the same choice everywhere it appears.`,
-		);
-	}
-
-	// Reject a parented choice whose declared parent does not actually carry it
-	// inline. applyPackageImport installs a child SOLELY through its parent Multi's
-	// inline `choices` (remapChoiceTree keeps only the children listed there) and,
-	// in the insertion loop, SKIPS the child's own flat entry assuming the parent
-	// will carry it. So a hand-edited/cross-version package where entry X names
-	// parentChoiceId=M (M an importable entry) while M does not list X inline would
-	// import X nowhere — silently dropped while the preview still listed X and the
-	// import reports success. A legitimately exported package always inlines a
-	// parented child as a direct member of its parent Multi, so failing closed here
-	// keeps the previewed set of choices identical to the installed set.
-	const uncarriedChildId = findUncarriedChildChoiceId(parsed.choices);
-	if (uncarriedChildId !== null) {
-		throw new Error(
-			`Package choice "${uncarriedChildId}" names a parent that does not list it as a child. Each parented choice must appear inside its parent.`,
-		);
-	}
-
-	return parsed;
-}
-
-function findDuplicateAssetPath(
-	assets: QuickAddPackage["assets"],
-): string | null {
-	const seen = new Set<string>();
-	for (const asset of assets) {
-		// Key on the normalized destination the writer collides on (so "scripts//x.js"
-		// and "scripts/x.js" — distinct strings, one on-disk file — are caught too),
-		// not the raw string. normalizePath only collapses slashes/whitespace; it does
-		// not resolve "..", so escaping paths still compare honestly (and the write
-		// path rejects them regardless).
-		const key = normalizePath(asset.originalPath ?? "");
-		if (seen.has(key)) return asset.originalPath;
-		seen.add(key);
-	}
-	return null;
-}
-
-/**
- * The id of the first choice that appears more than once in the package with
- * DIFFERENT content, or null if every id is internally consistent.
- *
- * Walks every choice node anywhere in the package — flat `pkg.choices` entries
- * plus all descendants reachable via Multi `choices`, Macro-command
- * `NestedChoice` embedded choices, and Conditional then/else branches — keyed by
- * `choice.id`, and compares a canonical serialization of each appearance. The
- * comparison is over the FULL subtree (a divergence deep inside is caught at both
- * the inner id and every enclosing id), key-order-insensitive (so it never
- * false-rejects a re-serialized-but-equal package), and array-order-sensitive (so
- * a reordered command list — which changes behavior — counts as divergent).
- */
-function findDivergentChoiceId(
-	choices: QuickAddPackage["choices"],
-): string | null {
-	const canonicalById = new Map<string, string>();
-	let divergentId: string | null = null;
-
-	const visit = (choice: IChoice | null | undefined): void => {
-		if (divergentId !== null) return;
-		if (!choice || typeof choice !== "object") return;
-
-		const id = (choice as { id?: unknown }).id;
-		if (typeof id === "string") {
-			const canonical = canonicalizeJsonValue(choice);
-			const prior = canonicalById.get(id);
-			if (prior === undefined) {
-				canonicalById.set(id, canonical);
-			} else if (prior !== canonical) {
-				divergentId = id;
-				return;
-			}
-		}
-
-		if (choice.type === "Multi") {
-			const multi = choice as IMultiChoice;
-			if (Array.isArray(multi.choices)) {
-				for (const child of multi.choices) visit(child);
-			}
-		}
-
-		if (choice.type === "Macro") {
-			const macro = choice as IMacroChoice;
-			visitNestedChoicesInCommands(macro.macro?.commands, visit);
-		}
-	};
-
-	for (const entry of choices) {
-		if (divergentId !== null) break;
-		visit(entry?.choice);
-	}
-
-	return divergentId;
-}
-
-function visitNestedChoicesInCommands(
-	commands: ICommand[] | undefined,
-	visit: (choice: IChoice | null | undefined) => void,
-): void {
-	if (!Array.isArray(commands)) return;
-	for (const command of commands) {
-		if (!command) continue;
-		if (command.type === CommandType.NestedChoice) {
-			visit((command as INestedChoiceCommand).choice);
-		} else if (command.type === CommandType.Conditional) {
-			const conditional = command as IConditionalCommand;
-			visitNestedChoicesInCommands(conditional.thenCommands, visit);
-			visitNestedChoicesInCommands(conditional.elseCommands, visit);
-		}
-	}
-}
-
-/**
- * Deterministic, lossless serialization of a JSON value (the parsed package only
- * ever holds JSON primitives, arrays, and plain objects). Object keys are sorted
- * so two appearances that differ only in key order compare equal, while array
- * order is preserved so a reordered list compares unequal. `JSON.parse` exposes a
- * payload `__proto__` as an OWN enumerable property (it does not pollute the
- * prototype), so `Object.keys` includes it and divergence there is still caught.
- */
-function canonicalizeJsonValue(value: unknown): string {
-	if (value === null || typeof value !== "object") {
-		const serialized = JSON.stringify(value);
-		// `undefined` (not valid JSON, never produced by JSON.parse) stringifies to
-		// the JS value `undefined`; encode it distinctly so it can't collide with a
-		// real value.
-		return serialized === undefined ? "\u0000undefined" : serialized;
-	}
-	if (Array.isArray(value)) {
-		return `[${value.map(canonicalizeJsonValue).join(",")}]`;
-	}
-	const record = value as Record<string, unknown>;
-	const keys = Object.keys(record).sort();
-	return `{${keys
-		.map((key) => `${JSON.stringify(key)}:${canonicalizeJsonValue(record[key])}`)
-		.join(",")}}`;
-}
-
-/**
- * The id of the first flat entry whose declared parent is also a package entry but
- * does NOT carry it inline, or null if every parented entry is carried.
- *
- * Mirrors {@link applyPackageImport}'s carry rule EXACTLY: a parented child is
- * installed only as a DIRECT member of its parent Multi's `choices` array (that is
- * the single level {@link remapChoiceTree} keeps and the same level the insertion
- * loop skips the child's own entry for). `parentChoiceId` in any real export is
- * always the direct Multi parent (buildChoiceCatalog only assigns it via Multi
- * recursion; macro/NestedChoice embedded choices are never their own entries), so
- * a direct-membership check neither false-rejects a legitimate package nor
- * false-accepts a child buried under a non-importable grandchild (which the import
- * would still drop). Entries whose `parentChoiceId` is not itself an entry are
- * exempt — the importer routes those to the existing-vault parent or root, so they
- * are never dropped.
- */
-function findUncarriedChildChoiceId(
-	choices: QuickAddPackage["choices"],
-): string | null {
-	const entryById = new Map(choices.map((entry) => [entry.choice.id, entry]));
-
-	for (const entry of choices) {
-		const parentId = entry.parentChoiceId;
-		if (parentId === null) continue;
-
-		const parentEntry = entryById.get(parentId);
-		if (!parentEntry) continue;
-
-		const parent = parentEntry.choice;
-		const carriedInline = childChoicesOf(parent).some(
-			(child) => child?.id === entry.choice.id,
-		);
-		if (!carriedInline) return entry.choice.id;
-	}
-
-	return null;
 }
 
 export async function analysePackage(
@@ -419,8 +178,16 @@ export async function analysePackagePreview(
 	existingChoices: IChoice[],
 	pkg: QuickAddPackage,
 ): Promise<PackagePreview> {
+	// An asset import can write is probed under its own spelling and under the
+	// path it will be written to, so a backslash-spelled asset still warns about
+	// the file it overwrites. One import refuses (absolute, hidden) is never
+	// written, so it is not probed and cannot show as an overwrite.
 	const candidatePaths = new Set<string>([
-		...pkg.assets.map((asset) => asset.originalPath),
+		...pkg.assets.flatMap((asset) =>
+			isWritableAssetDestination(asset.originalPath)
+				? [asset.originalPath, normalizeVaultPath(asset.originalPath)]
+				: [],
+		),
 		...collectReferencedAssetPaths(pkg),
 	]);
 
@@ -444,10 +211,10 @@ export async function analysePackagePreview(
 	const { summary } = preview;
 	log.logMessage(
 		`QuickAdd import preview: choices=${preview.choiceCount} files=${preview.fileCount} ` +
-			`scripts=${summary.scriptCount} runOnStartup=${summary.runsOnStartup} ` +
-			`registersCommands=${summary.registersCommandCount} ` +
-			`overwritesChoices=${summary.overwritesChoices} overwritesFiles=${summary.overwritesFiles} ` +
-			`missing=${summary.missingCount} critical=${summary.criticalCount} warning=${summary.warningCount}`,
+		`scripts=${summary.scriptCount} runOnStartup=${summary.runsOnStartup} ` +
+		`registersCommands=${summary.registersCommandCount} ` +
+		`overwritesChoices=${summary.overwritesChoices} overwritesFiles=${summary.overwritesFiles} ` +
+		`missing=${summary.missingCount} critical=${summary.criticalCount} warning=${summary.warningCount}`,
 	);
 
 	return preview;
@@ -459,7 +226,7 @@ export async function analysePackagePreview(
  * out-of-bounds destination so the whole import aborts (surfaced as a Notice by
  * ImportPackageModal). Defensive: imported packages are untrusted shared data.
  */
-function validateAssetDestination(rawPath: string): string {
+export function validateAssetDestination(rawPath: string): string {
 	const rawDestination = rawPath ?? "";
 	const trimmedDestination = rawDestination.trim();
 	if (!trimmedDestination) {
@@ -488,14 +255,7 @@ function validateAssetDestination(rawPath: string): string {
 		);
 	}
 
-	// Reject a leading-dot config/hidden directory at ANY depth, not just the
-	// first segment: "notes/.git/hooks/post-commit" or "docs/.obsidian/plugins/
-	// x/main.js" would otherwise pass (segments[0] is "notes"/"docs") yet drop a
-	// code-execution payload into a trusted dir on the real filesystem — a vector
-	// the realpath guard can't see because the target stays inside the vault. The
-	// check is structural (segment starts with "."), so casing variants
-	// (.Obsidian) are caught too. The "..%"-prefix carve-out keeps url-encoded
-	// traversal text (e.g. "..%2fevil.md") importable as a benign literal filename.
+	// Reject hidden/config segments at every depth; "..%" remains a literal filename.
 	const configSegment = segments.find(
 		(segment) => segment.startsWith(".") && !segment.startsWith("..%"),
 	);
@@ -520,104 +280,37 @@ export async function applyPackageImport(
 	);
 
 	const catalog = new Map(pkg.choices.map((entry) => [entry.choice.id, entry]));
-	const secretOptionNamesByPath = buildSecretOptionNamesByPath(pkg);
-	const importableChoiceIds = new Set<string>();
-	const importableCache = new Map<string, boolean>();
-	const importableVisiting = new Set<string>();
+	const secretOptionNamesByPath = packageSecretOptionNames(pkg.assets, "import");
+	// Children of skipped or external parents are still imported independently.
+	const importableChoiceIds = new Set(
+		pkg.choices
+			.filter((entry) => choiceDecisionMap.get(entry.choice.id) !== "skip")
+			.map((entry) => entry.choice.id),
+	);
 
-	const isChoiceImportable = (choiceId: string): boolean => {
-		const finalizeImportable = (isImportable: boolean): boolean => {
-			importableCache.set(choiceId, isImportable);
-			importableVisiting.delete(choiceId);
-			return isImportable;
-		};
-
-		if (importableCache.has(choiceId)) {
-			return importableCache.get(choiceId) as boolean;
-		}
-
-		if (importableVisiting.has(choiceId)) {
-			// Break potential cycles by treating the current path as importable.
-			return true;
-		}
-
-		importableVisiting.add(choiceId);
-
-		const decision = choiceDecisionMap.get(choiceId);
-		if (decision === "skip") {
-			return finalizeImportable(false);
-		}
-
-		const entry = catalog.get(choiceId);
-		if (!entry) {
-			return finalizeImportable(false);
-		}
-
-		const parentId = entry.parentChoiceId;
-		if (!parentId) {
-			return finalizeImportable(true);
-		}
-
-		if (!catalog.has(parentId)) {
-			return finalizeImportable(true);
-		}
-
-		const parentDecision = choiceDecisionMap.get(parentId);
-		if (parentDecision === "skip") {
-			return finalizeImportable(true);
-		}
-
-		const result = isChoiceImportable(parentId);
-		return finalizeImportable(result);
-	};
-
-	for (const entry of pkg.choices) {
-		if (isChoiceImportable(entry.choice.id)) {
-			importableChoiceIds.add(entry.choice.id);
-		}
-	}
-
-	const duplicatedOriginalIds = new Set<string>();
-	const nonDuplicatedOriginalIds = new Set<string>();
+	const duplicationById = new Map<string, boolean>();
 	const visitingIds = new Set<string>();
 	const idMap = new Map<string, string>();
 
 	const isDuplicated = (choiceId: string): boolean => {
-		const markDuplicated = (): true => {
-			duplicatedOriginalIds.add(choiceId);
-			nonDuplicatedOriginalIds.delete(choiceId);
-			return true;
-		};
-		const markNotDuplicated = (): false => {
-			nonDuplicatedOriginalIds.add(choiceId);
-			return false;
-		};
-
 		if (!importableChoiceIds.has(choiceId)) return false;
-		const cached = duplicatedOriginalIds.has(choiceId);
-		if (cached) return true;
-		if (nonDuplicatedOriginalIds.has(choiceId)) return false;
-		if (visitingIds.has(choiceId)) return markNotDuplicated();
-
+		const cached = duplicationById.get(choiceId);
+		if (cached !== undefined) return cached;
+		if (visitingIds.has(choiceId)) {
+			duplicationById.set(choiceId, false);
+			return false;
+		}
 		visitingIds.add(choiceId);
 		try {
-			const decision = choiceDecisionMap.get(choiceId);
-			if (decision === "duplicate") {
-				return markDuplicated();
-			}
-
-			const parentId = catalog.get(choiceId)?.parentChoiceId ?? null;
-			if (!parentId) return markNotDuplicated();
-			const parentDecision = choiceDecisionMap.get(parentId);
-			if (parentDecision === "duplicate") {
-				return markDuplicated();
-			}
-			if (!importableChoiceIds.has(parentId)) return markNotDuplicated();
-			if (isDuplicated(parentId)) {
-				return markDuplicated();
-			}
-
-			return markNotDuplicated();
+			const parentId = catalog.get(choiceId)?.parentChoiceId;
+			const duplicated = choiceDecisionMap.get(choiceId) === "duplicate" || Boolean(
+				parentId && (
+					choiceDecisionMap.get(parentId) === "duplicate" ||
+					(importableChoiceIds.has(parentId) && isDuplicated(parentId))
+				),
+			);
+			duplicationById.set(choiceId, duplicated);
+			return duplicated;
 		} finally {
 			visitingIds.delete(choiceId);
 		}
@@ -628,6 +321,23 @@ export async function applyPackageImport(
 		const shouldDuplicate = isDuplicated(entry.choice.id);
 		const newId = shouldDuplicate ? uuidv4() : entry.choice.id;
 		idMap.set(entry.choice.id, newId);
+	}
+
+	// "Import" adds a choice; it never replaces one. A choice already in the
+	// vault needs an explicit overwrite, duplicate or skip. Checked before
+	// anything is written, so a refused import changes nothing.
+	const existingIds = new Set(flattenChoices(existingChoices).map((c) => c.id));
+	const wouldReplace = pkg.choices.filter((entry) =>
+		importableChoiceIds.has(entry.choice.id) &&
+		(choiceDecisionMap.get(entry.choice.id) ?? "import") === "import" &&
+		idMap.get(entry.choice.id) === entry.choice.id &&
+		existingIds.has(entry.choice.id),
+	);
+	if (wouldReplace.length > 0) {
+		const names = wouldReplace.map((entry) => `"${entry.choice.name}"`).join(", ");
+		throw new Error(
+			`Already in this vault: ${names}. Import only adds new choices, so choose overwrite, duplicate or skip for ${wouldReplace.length === 1 ? "it" : "them"}.`,
+		);
 	}
 
 	const updatedChoices = deepClone(existingChoices);
@@ -643,18 +353,44 @@ export async function applyPackageImport(
 			continue;
 		}
 
-			const clone = deepClone(entry.choice);
-			const remapped = remapChoiceTree(
-				clone,
-				idMap,
-				importableChoiceIds,
-				{
-					secretOptionNamesByPath,
-					stripUnknownStringSettings: true,
-				},
-			);
-			preparedChoices.set(entry.choice.id, remapped);
-		}
+		const clone = deepClone(entry.choice);
+		const remapped = remapChoiceTree(
+			clone,
+			idMap,
+			importableChoiceIds,
+			{
+				secretOptionNamesByPath,
+				stripUnknownStringSettings: true,
+			},
+		);
+		preparedChoices.set(entry.choice.id, remapped);
+	}
+
+	// Point the package's choices at where its files will actually land. This
+	// happens before any prepared folder is merged with the vault's, so a
+	// child the reader skipped or added is never rewritten. A skipped asset is
+	// still referenced at its destination: the reader kept the file already
+	// there (typically after re-importing), so choices and includes have to
+	// point at that copy, not at the package's original path.
+	const resolvedAssetDestinations = pkg.assets.map((asset) => {
+		const decision = assetDecisionMap.get(asset.originalPath);
+		const destinationPathInput = decision?.destinationPath?.trim();
+		const destinationPath = validateAssetDestination(
+			destinationPathInput || asset.originalPath,
+		);
+		return { asset, destinationPath };
+	});
+	// Keyed by the package's spelling and by the normalized path, because the
+	// include scanner and the template resolver look up normalized keys while
+	// script steps look up the raw path.
+	const assetPathOverrides = new Map<string, string>();
+	for (const { asset, destinationPath } of resolvedAssetDestinations) {
+		assetPathOverrides.set(asset.originalPath, destinationPath);
+		assetPathOverrides.set(normalizeVaultPath(asset.originalPath), destinationPath);
+	}
+	for (const choice of preparedChoices.values()) {
+		applyAssetPathOverrides(choice, assetPathOverrides);
+	}
 
 	// Pin imported bare-name AI commands before insertion: cross-vault refs
 	// that survived export are kept when still valid; everything else adopts
@@ -668,6 +404,31 @@ export async function applyPackageImport(
 	}
 
 	const handledChoices = new Set<string>();
+	// Children that ride along inside an imported parent. They are reported
+	// once every entry has been placed, so a folder of five captures counts as
+	// six choices in the summary, matching the preview the reader confirmed.
+	const inlineChildren: Array<{ finalId: string }> = [];
+
+	// A child that arrives inside its parent can still have a same-id copy
+	// elsewhere in the vault: the reader dragged it out of the folder after an
+	// earlier import, and the preview offered "overwrite" for it. Placing the
+	// parent would then leave two choices with one id. Drop the stray before
+	// anything lands. A copy still inside that folder is not a stray: the
+	// folder merge replaces it where it sits. A stray that is itself a folder
+	// may hold choices the reader skipped or added; it is kept aside so the
+	// merge can fold those into its incoming copy.
+	const detachedFolders = new Map<string, IChoice>();
+	for (const entry of pkg.choices) {
+		const originalId = entry.choice.id;
+		const parentId = entry.parentChoiceId;
+		if (!importableChoiceIds.has(originalId)) continue;
+		if (!parentId || !importableChoiceIds.has(parentId)) continue;
+		const finalId = idMap.get(originalId) ?? originalId;
+		const finalParentId = idMap.get(parentId) ?? parentId;
+		if (isDirectChildOf(updatedChoices, finalParentId, finalId)) continue;
+		const stray = removeChoiceFromTree(updatedChoices, finalId);
+		if (stray?.type === "Multi") detachedFolders.set(finalId, stray);
+	}
 
 	for (const entry of pkg.choices) {
 		const originalId = entry.choice.id;
@@ -687,13 +448,21 @@ export async function applyPackageImport(
 				: null;
 
 		if (parentImported) {
-			// Parent carries this child inline, so skip its own entry to avoid
-			// double-inserting. This trusts the parent to actually list the child
-			// inline (remapChoiceTree keeps only direct inline children); a package
-			// where it does not is rejected up front by findUncarriedChildChoiceId in
-			// parseQuickAddPackage, so a parsed import never silently drops it here.
+			// The parsed parent carries this child inline; inserting its flat entry would duplicate it.
+			// packageValidation rejects parents that omit their declared children.
 			handledChoices.add(originalId);
+			inlineChildren.push({ finalId });
 			continue;
+		}
+
+		if (choiceClone.type === "Multi") {
+			// A duplicated folder has a fresh id, so nothing in the vault matches.
+			const current = findChoiceInTree(updatedChoices, finalId);
+			mergeFolderChildren(
+				current?.type === "Multi" ? (current as IMultiChoice) : undefined,
+				choiceClone as IMultiChoice,
+				detachedFolders,
+			);
 		}
 
 		if (decision === "overwrite" || decision === "import") {
@@ -746,32 +515,22 @@ export async function applyPackageImport(
 		handledChoices.add(originalId);
 	}
 
-	const assetPathOverrides = new Map<string, string>();
+	// An inline child rides inside its parent, so it always lands. It replaced
+	// something when the vault already held its id: inside the folder, where
+	// the merge swapped it in place, or as a stray copy dropped above.
+	for (const { finalId } of inlineChildren) {
+		if (existingIds.has(finalId)) {
+			overwrittenChoiceIds.push(finalId);
+		} else {
+			addedChoiceIds.push(finalId);
+		}
+	}
+
 	const writtenAssets: string[] = [];
 	const skippedAssets: string[] = [];
-	const resolvedAssetDestinations = pkg.assets.map((asset) => {
-		const decision = assetDecisionMap.get(asset.originalPath);
-		const destinationPathInput = decision?.destinationPath?.trim();
-		const destinationPath = validateAssetDestination(
-			destinationPathInput || asset.originalPath,
-		);
-		return { asset, destinationPath };
-	});
 
-	// Resolved-destination uniqueness, as a PRE-PASS before any write: two assets
-	// can carry DISTINCT originalPaths yet resolve to ONE on-disk destination — the
-	// import modal defaults every template/capture asset to
-	// `<templateFolder>/<basename>`, so "A/x.md" and "B/x.md" both land at
-	// "Templates/x.md". Parse-time dedup keys on originalPath and can't see that.
-	// Writing them in sequence is silent last-write-wins: the user reviewed two
-	// files but only one set of bytes survives, and a choice rewired to that path
-	// (applyAssetPathOverrides) then runs the surviving bytes — breaking the
-	// "what you reviewed is what lands" gate. Refuse the whole import instead.
-	// Skipped assets never write, so they cannot collide.
-	// Fold case ONLY on a case-insensitive vault (macOS/Windows), where
-	// "Scripts/x.js" and "scripts/x.js" are ONE physical file. On a case-sensitive
-	// vault they are distinct files a legitimate package may ship, so comparing
-	// folded would wrongly reject a valid import.
+	// Validate all resolved destinations before writes so reviewed bytes cannot be replaced by a collision.
+	// Skipped assets cannot collide. Fold case only on case-insensitive vaults.
 	const foldCase = await isVaultCaseInsensitive(app);
 	const destinationOwners = new Map<
 		string,
@@ -792,18 +551,18 @@ export async function applyPackageImport(
 		});
 	}
 
-	// Symlink/realpath containment, as a PRE-PASS before any write: if a
-	// destination resolves through a pre-existing in-vault symlink to outside the
-	// vault, abort the whole import before touching disk. Every destination is
-	// checked (mirroring the lexical validateAssetDestination pass above), so a
-	// package carrying a vault-escaping asset is refused wholesale and surfaced
-	// loudly rather than silently dropped — consistent with how an absolute/".."
-	// destination already aborts regardless of the per-asset import mode.
-	// Desktop-only; a no-op on mobile and in tests (non-FileSystemAdapter).
+	// Check every destination, including skipped assets, before any write.
+	// Lexically safe paths can still escape through an existing symlink.
 	for (const { destinationPath } of resolvedAssetDestinations) {
 		await assertWriteStaysInVault(app, destinationPath);
 	}
 
+	// Decide every write, and decode every file, before the first one: a bundled
+	// template's `{{TEMPLATE:...}}` includes must point at where the included
+	// file is actually going, which is only known once all destinations are
+	// settled, and a file that fails to decode must stop the import before it
+	// writes anything.
+	const plannedWrites: Array<{ destinationPath: string; content: string }> = [];
 	for (const { asset, destinationPath } of resolvedAssetDestinations) {
 		const decision = assetDecisionMap.get(asset.originalPath);
 		const exists = await assetExists(app, destinationPath);
@@ -814,16 +573,21 @@ export async function applyPackageImport(
 			skippedAssets.push(destinationPath);
 			continue;
 		}
-
-		await ensureParentFolders(app, destinationPath);
-		const content = decodeFromBase64(asset.content);
-		await app.vault.adapter.write(destinationPath, content);
-		writtenAssets.push(destinationPath);
-		assetPathOverrides.set(asset.originalPath, destinationPath);
+		if (exists && (await app.vault.adapter.stat(destinationPath))?.type === "folder") {
+			throw new Error(
+				`Refusing to import: "${destinationPath}" is a folder. Choose a file path for "${asset.originalPath}".`,
+			);
+		}
+		plannedWrites.push({
+			destinationPath,
+			content: importedAssetContent(asset, destinationPath, assetPathOverrides),
+		});
 	}
 
-	for (const choice of preparedChoices.values()) {
-		applyAssetPathOverrides(choice, assetPathOverrides);
+	for (const { destinationPath, content } of plannedWrites) {
+		await ensureParentFolders(app, destinationPath);
+		await app.vault.adapter.write(destinationPath, content);
+		writtenAssets.push(destinationPath);
 	}
 
 	return {
@@ -836,35 +600,35 @@ export async function applyPackageImport(
 	};
 }
 
-function buildSecretOptionNamesByPath(
-	pkg: QuickAddPackage,
-): Map<string, ReadonlySet<string> | null> {
-	const secretOptionNamesByPath = new Map<string, ReadonlySet<string> | null>();
 
-	for (const asset of pkg.assets) {
-		if (asset.kind !== "user-script") continue;
-
-		try {
-			const detection = detectUserScriptSecretOptions(
-				decodeFromBase64(asset.content),
-				asset.originalPath,
-			);
-			secretOptionNamesByPath.set(
-				asset.originalPath,
-				detection.foundSecretOptions && detection.names.size === 0
-					? null
-					: detection.names,
-			);
-		} catch (error) {
-			log.logWarning(
-				`QuickAdd import could not inspect user-script settings '${asset.originalPath}': ${
-					(error as Error)?.message ?? error
-				}`,
-			);
-		}
+/**
+ * The bytes to write for a bundled asset. A template the formatter renders
+ * (`.md`, `.canvas` or `.base`, the same set the export scans for includes)
+ * gets its `{{TEMPLATE:...}}` includes followed to the destinations chosen in
+ * this import. Everything else - scripts, other files, and a note carrying a
+ * js fence - is written verbatim, so what the user reviewed is exactly what
+ * lands on disk.
+ */
+function importedAssetContent(
+	asset: QuickAddPackage["assets"][number],
+	destinationPath: string,
+	pathOverrides: ReadonlyMap<string, string>,
+): string {
+	const content = decodeFromBase64(asset.content);
+	const isTemplateKind =
+		asset.kind === "template" || asset.kind === "capture-template";
+	// Classified by the path written, so a spelling such as `Parent.md/`
+	// cannot hide the extension the formatter will see.
+	if (!isTemplateKind || !hasTemplateExtension(destinationPath)) {
+		return content;
 	}
-
-	return secretOptionNamesByPath;
+	if (
+		MARKDOWN_FILE_EXTENSION_REGEX.test(destinationPath) &&
+		extractScriptFromMarkdown(content).code
+	) {
+		return content;
+	}
+	return rewriteTemplateIncludes(content, pathOverrides);
 }
 
 async function assetExists(app: App, path: string): Promise<boolean> {
@@ -893,306 +657,5 @@ async function isVaultCaseInsensitive(app: App): Promise<boolean> {
 		return await app.vault.adapter.exists(swapped);
 	} catch {
 		return false;
-	}
-}
-
-function remapChoiceTree(
-	choice: IChoice,
-	idMap: Map<string, string>,
-	importableChoiceIds: Set<string>,
-	secretSanitizerOptions: UserScriptSecretSanitizerOptions,
-): IChoice {
-	const originalId = choice.id;
-	const finalId = idMap.get(originalId) ?? originalId;
-	choice.id = finalId;
-	const isDuplicated = finalId !== originalId;
-
-	if (choice.type === "Macro") {
-		const macroChoice = choice as IMacroChoice;
-		// `macro` is untrusted too: an imported package can omit it entirely, or
-		// carry a primitive where the object belongs. isMacroObject, not the
-		// looser isCommandLike: an Array passes `typeof === "object"`, and
-		// `macro.id = ...` on one sets a non-index property that JSON.stringify
-		// drops - a silent no-op that would leave the duplicate sharing an id.
-		if (isDuplicated && isMacroObject(macroChoice.macro)) {
-			macroChoice.macro.id = uuidv4();
-		}
-		// macroCommandsValueOf, not `macro?.commands`: an array-valued `macro` IS
-		// the command list (see MacroBuilder's recovery path), and reading
-		// `.commands` off it would silently skip remapping every choice reference
-		// and secret ref it holds.
-		remapCommands(
-			macroCommandsValueOf(macroChoice.macro),
-			idMap,
-			importableChoiceIds,
-			isDuplicated,
-			secretSanitizerOptions,
-		);
-	}
-
-	if (choice.type === "Multi") {
-		const multi = choice as IMultiChoice;
-		if (Array.isArray(multi.choices)) {
-			multi.choices = multi.choices
-				// A packaged folder's list can hold a `null` hole like any other
-				// (#1566); dereferencing it here aborted the whole import, taking
-				// healthy siblings with it.
-				.filter((child) => isChoiceLike(child) && importableChoiceIds.has(child.id))
-				.map((child) =>
-					remapChoiceTree(
-						child,
-						idMap,
-						importableChoiceIds,
-						secretSanitizerOptions,
-					),
-				);
-		}
-	}
-
-	return choice;
-}
-
-function remapCommands(
-	// `unknown`: raw `macro.commands` / branch values out of an imported package.
-	commands: unknown,
-	idMap: Map<string, string>,
-	importableChoiceIds: Set<string>,
-	shouldRegenerateIds: boolean,
-	secretSanitizerOptions: UserScriptSecretSanitizerOptions,
-): void {
-	// Mutates each command in place, so a value we cannot read is simply left
-	// alone rather than replaced with the [] we read it as.
-	for (const command of commandListOf(commands)) {
-		if (!isCommandLike(command)) continue;
-		stripUserScriptSecretRefsFromCommand(command, secretSanitizerOptions);
-
-		if (shouldRegenerateIds) {
-			command.id = uuidv4();
-		}
-
-		switch (command.type) {
-			case CommandType.Choice: {
-				const choiceCommand = command as IChoiceCommand;
-				const mapped = idMap.get(choiceCommand.choiceId);
-				if (mapped) choiceCommand.choiceId = mapped;
-				break;
-			}
-			case CommandType.Conditional: {
-				const conditional = command as IConditionalCommand;
-				remapCommands(
-					conditional.thenCommands,
-					idMap,
-					importableChoiceIds,
-					shouldRegenerateIds,
-					secretSanitizerOptions,
-				);
-				remapCommands(
-					conditional.elseCommands,
-					idMap,
-					importableChoiceIds,
-					shouldRegenerateIds,
-					secretSanitizerOptions,
-				);
-				break;
-			}
-		case CommandType.NestedChoice: {
-			const nested = command as INestedChoiceCommand;
-			if (nested.choice && importableChoiceIds.has(nested.choice.id)) {
-				nested.choice = remapChoiceTree(
-					nested.choice,
-					idMap,
-					importableChoiceIds,
-					secretSanitizerOptions,
-				);
-			}
-			break;
-		}
-			default:
-				break;
-		}
-	}
-}
-
-function replaceChoiceInTree(choices: IChoice[], replacement: IChoice): boolean {
-	for (let i = 0; i < choices.length; i++) {
-		const current = choices[i];
-		if (!isChoiceLike(current)) continue;
-		if (current.id === replacement.id) {
-			choices.splice(i, 1, replacement);
-			return true;
-		}
-		if (replaceChoiceInTree(childChoicesOf(current), replacement)) {
-			return true;
-		}
-	}
-	return false;
-}
-
-function insertUnderParent(
-	choices: IChoice[],
-	parentId: string,
-	child: IChoice,
-): boolean {
-	for (const choice of choices) {
-		if (!isChoiceLike(choice)) continue;
-		if (choice.id === parentId && choice.type === "Multi") {
-			return insertIntoMulti(choice as IMultiChoice, child);
-		}
-		if (insertUnderParent(childChoicesOf(choice), parentId, child)) {
-			return true;
-		}
-	}
-	return false;
-}
-
-/**
- * Returns false when the parent's existing children could not be read: importing
- * INTO such a folder would replace whatever data.json still holds under it with
- * a one-element array. Callers fall back to a root append, so the imported
- * choice still lands somewhere rather than costing the user that value (#1566).
- */
-function insertIntoMulti(parent: IMultiChoice, child: IChoice): boolean {
-	if (!Array.isArray(parent.choices)) {
-		if (hasUnreadableChildren(parent)) return false;
-		parent.choices = [];
-	}
-	const idx = parent.choices.findIndex(
-		(choice) => isChoiceLike(choice) && choice.id === child.id,
-	);
-	if (idx !== -1) {
-		parent.choices.splice(idx, 1, child);
-	} else {
-		parent.choices.push(child);
-	}
-	return true;
-}
-
-function findMultiByPath(
-	rootChoices: IChoice[],
-	path: string[],
-): IMultiChoice | null {
-	if (path.length === 0) return null;
-	let currentChoices = rootChoices;
-	let currentMulti: IMultiChoice | null = null;
-
-	for (const segment of path) {
-		const next = currentChoices.find(
-			(choice) =>
-				isChoiceLike(choice) &&
-				choice.type === "Multi" &&
-				choice.name === segment,
-		) as IMultiChoice | undefined;
-		if (!next) return null;
-		currentMulti = next;
-		currentChoices = childChoicesOf(next);
-	}
-
-	return currentMulti;
-}
-
-function applyAssetPathOverrides(
-	choice: IChoice,
-	pathOverrides: Map<string, string>,
-): void {
-	switch (choice.type) {
-		case "Macro": {
-			const macroChoice = choice as IMacroChoice;
-			applyOverridesToCommands(
-				macroCommandsValueOf(macroChoice.macro),
-				pathOverrides,
-			);
-			break;
-		}
-		case "Template": {
-			const templateChoice = choice as ITemplateChoice;
-			const replacement = pathOverrides.get(templateChoice.templatePath);
-			if (replacement) {
-				templateChoice.templatePath = replacement;
-			}
-			break;
-		}
-		case "Capture": {
-			const captureChoice = choice as ICaptureChoice;
-			const templatePath = captureChoice.createFileIfItDoesntExist?.template;
-			if (templatePath) {
-				const replacement = pathOverrides.get(templatePath);
-				if (replacement) {
-					captureChoice.createFileIfItDoesntExist = {
-						...captureChoice.createFileIfItDoesntExist,
-						template: replacement,
-					};
-				}
-			}
-			break;
-		}
-		case "Multi": {
-			const multi = choice as IMultiChoice;
-			multi.choices?.forEach((child) =>
-				applyAssetPathOverrides(child, pathOverrides),
-			);
-			break;
-		}
-		default:
-			break;
-	}
-}
-
-function applyOverridesToCommands(
-	commands: unknown,
-	pathOverrides: Map<string, string>,
-): void {
-	for (const command of commandListOf(commands)) {
-		if (!isCommandLike(command)) continue;
-
-		switch (command.type) {
-			case CommandType.UserScript: {
-				const userScript = command as IUserScript;
-				const replacement = pathOverrides.get(userScript.path);
-				if (replacement) {
-					// Note-backed scripts use the vault path as their command name
-					// (and member selector, `path::member`); keep it in sync when the
-					// asset is written to a different destination on import. `.js`
-					// scripts use a basename name (!= path), so this leaves them alone.
-					if (userScript.name === userScript.path) {
-						userScript.name = replacement;
-					} else if (userScript.name.startsWith(`${userScript.path}::`)) {
-						userScript.name =
-							replacement + userScript.name.slice(userScript.path.length);
-					}
-					userScript.path = replacement;
-				}
-				break;
-			}
-			case CommandType.Conditional: {
-				const conditional = command as IConditionalCommand;
-				if (
-					conditional.condition.mode === "script" &&
-					conditional.condition.scriptPath
-				) {
-					const replacement = pathOverrides.get(
-						conditional.condition.scriptPath,
-					);
-					if (replacement) {
-						conditional.condition = {
-							...conditional.condition,
-							scriptPath: replacement,
-						};
-					}
-				}
-
-				applyOverridesToCommands(conditional.thenCommands, pathOverrides);
-				applyOverridesToCommands(conditional.elseCommands, pathOverrides);
-				break;
-			}
-			case CommandType.NestedChoice: {
-				const nested = command as INestedChoiceCommand;
-				if (nested.choice) {
-					applyAssetPathOverrides(nested.choice, pathOverrides);
-				}
-				break;
-			}
-			default:
-				break;
-		}
 	}
 }

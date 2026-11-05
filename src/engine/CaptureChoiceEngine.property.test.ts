@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TFile, type App } from "obsidian";
 import type QuickAdd from "../main";
@@ -21,7 +22,6 @@ vi.mock("obsidian", async (importOriginal) => ({
 	stringifyYaml: (value: Record<string, unknown>) => Object.entries(value).map(([key, item]) => `${key}: ${JSON.stringify(item)}\n`).join(""),
 }));
 vi.mock("../main", () => ({ default: class {} }));
-vi.mock("obsidian-dataview", () => ({ getAPI: vi.fn() }));
 vi.mock("../logger/logManager", () => ({ log: { logError: vi.fn(), logWarning: vi.fn(), logMessage: vi.fn() } }));
 vi.mock("src/gui/InputSuggester/inputSuggester", () => ({ default: { Suggest: mocks.picker } }));
 vi.mock("../formatters/captureChoiceFormatter", () => ({
@@ -34,6 +34,7 @@ vi.mock("../formatters/captureChoiceFormatter", () => ({
 		setTargetFolderPath() {}
 		setTitle() {}
 		consumeCreatedClipboardAttachmentPaths() { return []; }
+		consumePropertyTokenExpanded() { return false; }
 		async formatFileName(value: string) { return value; }
 		async formatPropertyName(value: string) { return value; }
 		formatPropertyValue() { return mocks.value(); }
@@ -48,20 +49,28 @@ vi.mock("./SingleTemplateEngine", () => ({
 		run() { return mocks.template(); }
 	},
 }));
-vi.mock("../utilityObsidian", () => ({
+vi.mock("../utils/vaultQueries", () => ({
 	isFolder: () => false,
+}));
+vi.mock("../utils/fileOpening", () => ({
 	openExistingFileTab: () => null,
 	openFile: vi.fn(),
+}));
+vi.mock("../utils/templaterIntegration", () => ({
 	overwriteTemplaterOnce: vi.fn(),
 	isTemplaterTriggerOnCreateEnabled: () => mocks.templaterEnabled,
-	waitForTemplaterTriggerOnCreateToComplete: mocks.afterCreate,
+	createNoteAfterTemplaterTrigger: async (_app: unknown, _path: string, create: () => Promise<unknown>) => {
+		const file = await create();
+		await mocks.afterCreate();
+		return file;
+	},
 	withTemplaterFileCreationSuppressed: async (_app: unknown, _path: string, work: () => Promise<unknown>) => await work(),
 }));
 
 function fixture(content?: string) {
 	const choice = new CaptureChoice("Set status");
 	choice.captureTo = "Inbox.md";
-	choice.propertyCapture = { property: { kind: "named", format: "status" }, action: "set", createIfMissing: true };
+	choice.propertyCapture = { property: { kind: "named", format: "status" }, action: "set", createIfMissing: true, sort: "none" };
 	const executor = { ...createChoiceExecutor(), interactive: false, recordExecutionResult: vi.fn(), signalAbort: vi.fn() };
 	const file = Object.assign(new TFile(), { path: "Inbox.md", basename: "Inbox", name: "Inbox.md", extension: "md" });
 	let stored = content;
@@ -81,7 +90,7 @@ function fixture(content?: string) {
 			read: async () => stored ?? "",
 			create, createFolder,
 		},
-		workspace: { getActiveFile: () => stored === undefined ? null : file, getActiveViewOfType: () => null },
+		workspace: { getActiveFile: () => stored === undefined ? null : file, getActiveViewOfType: () => null, getLeavesOfType: () => [] },
 		fileManager: { processFrontMatter },
 	};
 	const plugin = { settings: { useSelectionAsCaptureValue: false, showCaptureNotification: false } } as QuickAdd;
@@ -170,7 +179,72 @@ describe("Capture property writes", () => {
 		expect(test.executor.signalAbort).toHaveBeenCalledWith(expect.any(UserCancelError));
 	});
 
-	it.each(["", []])("does not write or create a note for an empty list addition %j", async (value) => {
+	it("adds one list item per line of the captured value", async () => {
+		const test = fixture("---\nstatus: [old]\n---\nBody\n");
+		test.choice.propertyCapture!.action = "addToList";
+		mocks.value.mockResolvedValue("work\n personal \n\nold\n");
+		await test.run();
+		expect(readCaptureFrontmatter(test.read() ?? "")).toEqual({ status: ["old", "work", "personal"] });
+		expect(test.executor.recordExecutionResult).toHaveBeenCalledWith({ status: "success", file: test.file, effect: "changed" });
+	});
+
+	it("seeds property variables and compose-writes when the format contains {{PROPERTY}}", async () => {
+		const test = fixture("---\ntags: [old, keep]\n---\nBody\n");
+		test.choice.propertyCapture = { property: { kind: "named", format: "tags" }, action: "addToList", createIfMissing: true, sort: "none" };
+		test.choice.format = { enabled: true, format: "work\n{{PROPERTY}}" };
+		mocks.value.mockImplementation(async () => {
+			expect(test.executor.variables.get("propertyKey")).toBe("tags");
+			expect(test.executor.variables.get("propertyValue")).toEqual(["old", "keep"]);
+			expect(test.executor.variables.get("list")).toEqual(["old", "keep"]);
+			return "work\nold\nkeep";
+		});
+		await test.run();
+		expect(readCaptureFrontmatter(test.read() ?? "")).toEqual({ tags: ["work", "old", "keep"] });
+		expect(test.executor.variables.has("propertyKey")).toBe(false);
+		expect(test.executor.variables.has("propertyValue")).toBe(false);
+		expect(test.executor.variables.has("list")).toBe(false);
+	});
+
+	it("restores seeds so a second property Capture on the same executor can run", async () => {
+		const first = fixture("---\ntags: [old]\n---\nBody\n");
+		first.choice.propertyCapture = { property: { kind: "named", format: "tags" }, action: "addToList", createIfMissing: true, sort: "none" };
+		first.choice.format = { enabled: true, format: "work\n{{PROPERTY}}" };
+		mocks.value.mockResolvedValueOnce("work\nold");
+		await first.run();
+		expect(readCaptureFrontmatter(first.read() ?? "")).toEqual({ tags: ["work", "old"] });
+		expect(first.executor.variables.has("list")).toBe(false);
+
+		first.overwrite("---\ntags: [work, old]\nstatus: Draft\n---\nBody\n");
+		first.choice.propertyCapture = { property: { kind: "named", format: "status" }, action: "set", createIfMissing: true, sort: "none" };
+		first.choice.format = { enabled: true, format: "{{PROPERTY}} → Ready" };
+		mocks.value.mockResolvedValueOnce("Draft → Ready");
+		await first.run();
+		expect(readCaptureFrontmatter(first.read() ?? "")).toEqual({ tags: ["work", "old"], status: "Draft → Ready" });
+		expect(first.executor.variables.has("propertyKey")).toBe(false);
+	});
+
+	it("still appends when {{PROPERTY}} is absent from the format", async () => {
+		const test = fixture("---\ntags: [old, keep]\n---\nBody\n");
+		test.choice.propertyCapture = { property: { kind: "named", format: "tags" }, action: "addToList", createIfMissing: true, sort: "none" };
+		test.choice.format = { enabled: true, format: "work" };
+		mocks.value.mockResolvedValue("work");
+		await test.run();
+		expect(readCaptureFrontmatter(test.read() ?? "")).toEqual({ tags: ["old", "keep", "work"] });
+	});
+
+	it("stops a multi-line Set into a property without a type before creating the note", async () => {
+		const test = fixture();
+		test.choice.createFileIfItDoesntExist.enabled = true;
+		mocks.value.mockResolvedValue("work\npersonal");
+		await test.run();
+		expect(test.create).not.toHaveBeenCalled();
+		expect(test.createFolder).not.toHaveBeenCalled();
+		expect(test.executor.recordExecutionResult).toHaveBeenCalledExactlyOnceWith({
+			status: "error", reason: expect.stringContaining("Add to list"),
+		});
+	});
+
+	it.each(["", " \n\n", []])("does not write or create a note for an empty list addition %j", async (value) => {
 		for (const content of [undefined, "---\nstatus: [old]\n---\nBody\n"]) {
 			const test = fixture(content);
 			test.choice.createFileIfItDoesntExist.enabled = true;

@@ -2,55 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { App, TFile } from "obsidian";
 import type ICaptureChoice from "../types/choices/ICaptureChoice";
 
-vi.mock("../utilityObsidian", () => ({
-	templaterParseTemplate: vi.fn().mockResolvedValue(null),
-}));
-
-vi.mock("../gui/InputPrompt", () => ({
-	__esModule: true,
-	default: class {
-		factory() {
-			return {
-				Prompt: vi.fn().mockResolvedValue(""),
-				PromptWithContext: vi.fn().mockResolvedValue(""),
-			} as any;
-		}
-	},
-}));
-
-vi.mock("../gui/InputSuggester/inputSuggester", () => ({
-	__esModule: true,
-	default: class {
-		constructor() {}
-	},
-}));
-
-vi.mock("../gui/GenericSuggester/genericSuggester", () => ({
-	__esModule: true,
-	default: {
-		Suggest: vi.fn().mockResolvedValue(""),
-	},
-}));
-
-vi.mock("../gui/VDateInputPrompt/VDateInputPrompt", () => ({
-	__esModule: true,
-	default: {
-		Prompt: vi.fn().mockResolvedValue(""),
-	},
-}));
-
-vi.mock("../utils/errorUtils", () => ({
-	__esModule: true,
-	reportError: vi.fn(),
-	isCancellationError: vi.fn().mockReturnValue(false),
-}));
-
-vi.mock("../gui/MathModal", () => ({
-	__esModule: true,
-	MathModal: {
-		Prompt: vi.fn().mockResolvedValue(""),
-	},
-}));
+vi.mock("../utils/templaterIntegration", async () => (await import("../../tests/helpers/formatters/mocks")).templaterIntegrationMock());
 
 const inlineScriptCalls = vi.hoisted(() => [] as string[]);
 
@@ -66,52 +18,8 @@ vi.mock("../engine/SingleInlineScriptEngine", () => ({
 	},
 }));
 
-vi.mock("../engine/SingleMacroEngine", () => ({
-	__esModule: true,
-	SingleMacroEngine: class {
-		constructor() {}
-		async runAndGetOutput() {
-			return "";
-		}
-	},
-}));
-
-vi.mock("../engine/SingleTemplateEngine", () => ({
-	__esModule: true,
-	SingleTemplateEngine: class {
-		constructor() {}
-		async run() {
-			return "";
-		}
-		getAndClearTemplatePropertyVars() {
-			return new Map();
-		}
-		setLinkToCurrentFileBehavior() {}
-	},
-}));
-
-vi.mock("obsidian-dataview", () => ({
-	__esModule: true,
-	getAPI: vi.fn().mockReturnValue(null),
-}));
-
-vi.mock("../main", () => ({
-	__esModule: true,
-	default: class QuickAdd {
-		static instance = {
-			settings: { inputPrompt: "single-line" },
-			app: {
-				workspace: { getActiveViewOfType: vi.fn().mockReturnValue(null) },
-			},
-		};
-		settings = QuickAdd.instance.settings;
-		app = QuickAdd.instance.app;
-	},
-}));
-
 import { CaptureChoiceFormatter } from "./captureChoiceFormatter";
 import { findInlineScriptSpans } from "./formatter";
-import { INLINE_JAVASCRIPT_REGEX } from "../constants";
 
 const createChoice = (
 	overrides: Partial<ICaptureChoice> = {},
@@ -210,11 +118,11 @@ const createFormatter = (
 
 describe("capture linebreak escapes only apply to the format string (issue #527)", () => {
 	beforeEach(() => {
-		(global as any).navigator = {
+		vi.stubGlobal("navigator", {
 			clipboard: {
 				readText: vi.fn().mockResolvedValue(""),
 			},
-		};
+		});
 	});
 
 	it("preserves literal \\n in selected text through the two-pass capture flow", async () => {
@@ -230,7 +138,7 @@ describe("capture linebreak escapes only apply to the format string (issue #527)
 			createChoice(),
 			"",
 			createFile(),
-		);
+		).then(({ content }) => content);
 		expect(result).toBe("\\nabla");
 	});
 
@@ -242,7 +150,7 @@ describe("capture linebreak escapes only apply to the format string (issue #527)
 			createChoice(),
 			"existing",
 			createFile(),
-		);
+		).then(({ content }) => content);
 
 		// Top insertion places the capture on its own line above the body (#647); the
 		// point here is that the literal backslash-n in the payload survives untouched.
@@ -268,7 +176,7 @@ describe("capture linebreak escapes only apply to the format string (issue #527)
 			createChoice({ prepend: true }),
 			"Line A",
 			createFile(),
-		);
+		).then(({ content }) => content);
 		expect(result).toBe("Line A\n- hello\n");
 	});
 
@@ -313,7 +221,7 @@ describe("capture linebreak escapes only apply to the format string (issue #527)
 			choice,
 			"existing",
 			createFile(),
-		);
+		).then(({ content }) => content);
 
 		expect(result).toBe("existing\n## \\nabla\n\\nabla");
 	});
@@ -339,7 +247,7 @@ describe("capture linebreak escapes only apply to the format string (issue #527)
 			choice,
 			"existing",
 			createFile(),
-		);
+		).then(({ content }) => content);
 
 		// The snippet's \n must become a real newline in the created target line,
 		// matching pre-#527 behavior for global-variable targets.
@@ -426,19 +334,21 @@ describe("capture linebreak escapes only apply to the format string (issue #527)
 			expect(result).toBe(`{{oops \n${fenceOne}\n${fenceTwo}`);
 		});
 
-		it("finds spans identical to INLINE_JAVASCRIPT_REGEX (fuzz)", () => {
+		it("finds the same fences and code as the reference regex (fuzz)", () => {
+			// The grammar as a regex. Too slow to ship: it backtracks on long
+			// backtick runs (#1907). On short inputs it is the reference.
 			const regexSpans = (input: string) => {
-				const re = new RegExp(INLINE_JAVASCRIPT_REGEX.source, "g");
+				const re = /`{3,}js quickadd([\s\S]*?)`{3,}/g;
 				const out: string[] = [];
 				let m: RegExpExecArray | null;
 				while ((m = re.exec(input)) !== null) {
-					out.push(`${m.index}:${m.index + m[0].length}`);
+					out.push(`${m.index}:${m.index + m[0].length}:${JSON.stringify(m[1].trim())}`);
 				}
 				return out.join(",");
 			};
 			const scanSpans = (input: string) =>
 				findInlineScriptSpans(input)
-					.map((s) => `${s.start}:${s.end}`)
+					.map((s) => `${s.start}:${s.end}:${JSON.stringify(s.code)}`)
 					.join(",");
 
 			// Deterministic LCG so failures reproduce.

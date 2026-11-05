@@ -1,5 +1,6 @@
+import { markdownFile as makeFile } from "../../tests/helpers/utilities/obsidianFixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TFile, type App } from "obsidian";
+import type { App } from "obsidian";
 import {
 	appendConfiguredFrontmatterPropertyLinkValue,
 	appendLinkToFrontmatterProperty,
@@ -11,14 +12,6 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-function makeFile(path: string): TFile {
-	const file = new TFile();
-	file.path = path;
-	file.name = path.split("/").pop() ?? path;
-	file.basename = file.name.replace(/\.md$/i, "");
-	file.extension = "md";
-	return file;
-}
 
 describe("appendLinkToFrontmatterProperty failure visibility (audit)", () => {
 	it("surfaces a high-visibility error (logError) instead of a low-key warning when the append fails", async () => {
@@ -30,6 +23,7 @@ describe("appendLinkToFrontmatterProperty failure visibility (audit)", () => {
 		const targetFile = makeFile("Host.md");
 		const createdFile = makeFile("Created.md");
 		const app = {
+			workspace: { getActiveViewOfType: () => null, getLeavesOfType: () => [] },
 			fileManager: {
 				generateMarkdownLink: vi.fn(() => "[[Created]]"),
 				processFrontMatter: vi.fn(async () => {
@@ -51,6 +45,7 @@ describe("appendLinkToFrontmatterProperty failure visibility (audit)", () => {
 		const message = logError.mock.calls[0]?.[0] as string;
 		expect(message).toContain("could not append the link");
 		expect(message).toContain("'related'");
+		expect(message).toContain("write failed");
 	});
 });
 

@@ -1,22 +1,15 @@
+// @vitest-environment jsdom
 import { createChoiceExecutor } from "../../tests/helpers/createChoiceExecutor";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Notice, TFile, TFolder, type App } from "obsidian";
+import { Notice, prepareFuzzySearch, TFile, TFolder, View, type App, type SearchMatches } from "obsidian";
 import InputSuggester from "src/gui/InputSuggester/inputSuggester";
 import { CaptureChoiceEngine } from "./CaptureChoiceEngine";
 import type ICaptureChoice from "../types/choices/ICaptureChoice";
 import type { IChoiceExecutor } from "../IChoiceExecutor";
-import {
-	getMarkdownFilesInFolder,
-	getMarkdownFilesMatchingFilter,
-	getMarkdownFilesWithProperty,
-	insertOnNewLineBelow,
-	insertFileLinkToActiveView,
-	isFolder,
-	jumpToNextTemplaterCursorIfPossible,
-	openFile,
-	overwriteTemplaterOnce,
-	setMarkdownCursorAtOffset,
-} from "../utilityObsidian";
+import { getMarkdownFilesInFolder, getMarkdownFilesMatchingFilter, getMarkdownFilesWithProperty, isFolder } from "../utils/vaultQueries";
+import { insertOnNewLineBelow, insertFileLinkToCurrentNote, setMarkdownCursorAtOffset } from "../utils/editorInsertion";
+import { jumpToNextTemplaterCursorIfPossible, overwriteTemplaterOnce } from "../utils/templaterIntegration";
+import { openFile } from "../utils/fileOpening";
 import { QA_INTERNAL_CAPTURE_TARGET_FILE_PATH } from "../constants";
 import { ChoiceAbortError } from "../errors/ChoiceAbortError";
 import { MacroAbortError } from "../errors/MacroAbortError";
@@ -82,10 +75,12 @@ vi.mock("../formatters/captureChoiceFormatter", () => ({
 		async formatContentWithFile(content: string) {
 			if (/\{\{clipboard\}\}/i.test(content)) {
 				createdClipboardAttachmentPaths.push("Clipboard image.png");
-				return content.replace(/\{\{clipboard\}\}/gi, "![[Clipboard image.png]]");
+				content = content.replace(/\{\{clipboard\}\}/gi, "![[Clipboard image.png]]");
 			}
-
-			return content;
+			return { content, captureContent: content, cursor: { kind: "none" } };
+		}
+		async insertFormattedContent(content: string) {
+			return { content, captureContent: content, cursor: { kind: "none" } };
 		}
 		async formatFileName(name: string) {
 			return name;
@@ -96,33 +91,36 @@ vi.mock("../formatters/captureChoiceFormatter", () => ({
 		consumeCreatedClipboardAttachmentPaths() {
 			return createdClipboardAttachmentPaths.splice(0);
 		}
-		getCaptureInsertionEndOffset() {
-			return null;
-		}
 	},
 	setUseSelectionAsCaptureValueMock,
 }));
 
-vi.mock("../utilityObsidian", () => ({
+vi.mock("../utils/editorInsertion", () => ({
 	// Editor-insertion helpers return true when the insertion lands; default the mocks
 	// to "inserted" so capture-to-active-file paths proceed to the cosmetic/openFile steps.
 	appendToCurrentLine: vi.fn(() => true),
+	insertFileLinkToCurrentNote: vi.fn(),
+	insertOnNewLineAbove: vi.fn(() => true),
+	insertOnNewLineBelow: vi.fn(() => true),
+	setMarkdownCursorAtOffset: vi.fn(() => true),
+}));
+vi.mock("../utils/vaultQueries", () => ({
 	getMarkdownFilesInFolder: vi.fn(() => []),
 	getMarkdownFilesMatchingFilter: vi.fn(() => []),
 	getMarkdownFilesWithProperty: vi.fn(() => []),
 	getMarkdownFilesWithTag: vi.fn(() => []),
-	insertFileLinkToActiveView: vi.fn(),
-	insertOnNewLineAbove: vi.fn(() => true),
-	insertOnNewLineBelow: vi.fn(() => true),
 	isFolder: vi.fn(() => false),
+}));
+vi.mock("../utils/templaterIntegration", () => ({
 	isTemplaterTriggerOnCreateEnabled: vi.fn(() => false),
 	jumpToNextTemplaterCursorIfPossible: vi.fn(),
+	overwriteTemplaterOnce: vi.fn(),
+	templaterParseTemplate: vi.fn(async (_app, content) => content),
+	createNoteAfterTemplaterTrigger: vi.fn(async (_app: unknown, _path: string, create: () => Promise<unknown>) => create()),
+}));
+vi.mock("../utils/fileOpening", () => ({
 	openExistingFileTab: vi.fn(() => null),
 	openFile: vi.fn(),
-	overwriteTemplaterOnce: vi.fn(),
-	setMarkdownCursorAtOffset: vi.fn(() => true),
-	templaterParseTemplate: vi.fn(async (_app, content) => content),
-	waitForTemplaterTriggerOnCreateToComplete: vi.fn(),
 }));
 
 vi.mock("three-way-merge", () => ({
@@ -146,16 +144,22 @@ vi.mock("./SingleTemplateEngine", () => ({
 	},
 }));
 
-vi.mock("obsidian-dataview", () => ({
-	getAPI: vi.fn(),
-}));
-
 vi.mock("../main", () => ({
 	default: class QuickAddMock {},
 }));
 
-const createApp = () =>
-	({
+/**
+ * Like Obsidian's: `View` gets the active leaf's view (a canvas in some tests);
+ * a MarkdownView lookup gets `markdownView`.
+ */
+function activeViewOfType(markdownView: unknown = null) {
+	return vi.fn(function (this: { activeLeaf?: { view?: unknown } | null }, type: unknown) {
+		return type === View ? this.activeLeaf?.view ?? null : markdownView;
+	});
+}
+
+const createApp = () => {
+	const app = {
 		vault: {
 			adapter: {
 				exists: vi.fn(async () => false),
@@ -171,13 +175,22 @@ const createApp = () =>
 		},
 		workspace: {
 			getActiveFile: vi.fn(() => null),
-			getActiveViewOfType: vi.fn(() => null),
+			getActiveViewOfType: activeViewOfType(),
+			getLeavesOfType: vi.fn(() => []),
 		},
 		fileManager: {
 			getNewFileParent: vi.fn(() => ({ path: "" })),
 			trashFile: vi.fn(async () => {}),
 		},
-	} as unknown as App);
+	} as unknown as App;
+	// Like Obsidian's, but over this fake's `read` and `modify`, which tests replace.
+	app.vault.process = vi.fn(async (file: TFile, fn: (content: string) => string) => {
+		const next = fn(await app.vault.read(file));
+		await app.vault.modify(file, next);
+		return next;
+	});
+	return app;
+};
 
 const createChoice = (overrides: Partial<ICaptureChoice> = {}): ICaptureChoice => ({
 	id: "capture-choice-id",
@@ -223,6 +236,13 @@ const createExecutor = (): IChoiceExecutor => ({
 	variables: new Map<string, unknown>(),
 });
 
+function createCaptureEngine({
+	app = createApp(), choice = createChoice(), executor = createExecutor(), selection = false,
+}: { app?: App; choice?: ICaptureChoice; executor?: IChoiceExecutor; selection?: boolean } = {}) {
+	return new CaptureChoiceEngine(app,
+		{ settings: { useSelectionAsCaptureValue: selection } } as any, choice, executor);
+}
+
 describe("CaptureChoiceEngine selection-as-value resolution", () => {
 	beforeEach(() => {
 		setUseSelectionAsCaptureValueMock.mockClear();
@@ -236,7 +256,7 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 		vi.mocked(getMarkdownFilesMatchingFilter).mockReturnValue([]);
 		vi.mocked(getMarkdownFilesWithProperty).mockReset();
 		vi.mocked(getMarkdownFilesWithProperty).mockReturnValue([]);
-		vi.mocked(insertFileLinkToActiveView).mockReset();
+		vi.mocked(insertFileLinkToCurrentNote).mockReset();
 		vi.mocked(insertOnNewLineBelow).mockReturnValue(true);
 		vi.mocked(overwriteTemplaterOnce).mockClear();
 		vi.mocked(jumpToNextTemplaterCursorIfPossible).mockReset();
@@ -245,12 +265,7 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 	});
 
 	it("uses global setting when no override is set", async () => {
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice(),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine();
 
 		await engine.run();
 
@@ -258,12 +273,7 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 	});
 
 	it("uses per-choice override when provided", async () => {
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: true } } as any,
-			createChoice({ useSelectionAsCaptureValue: false }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ useSelectionAsCaptureValue: false }), selection: true });
 
 		await engine.run();
 
@@ -271,12 +281,7 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 	});
 
 	it("allows per-choice override to enable selection", async () => {
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ useSelectionAsCaptureValue: true }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ useSelectionAsCaptureValue: true }) });
 
 		await engine.run();
 
@@ -289,12 +294,7 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 			fileOpening: undefined as unknown as ICaptureChoice["fileOpening"],
 			captureToActiveFile: true,
 		});
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: true } } as any,
-			choice,
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: choice, selection: true });
 		const file = { path: "Test.md", basename: "Test" } as any;
 
 		(engine as any).getFormattedPathToCaptureTo = vi
@@ -304,6 +304,7 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 		(engine as any).onFileExists = vi.fn().mockResolvedValue({
 			file,
 			newFileContent: "content",
+			priorContent: "",
 			captureContent: "content",
 		});
 
@@ -327,12 +328,7 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 			openFile: true,
 			captureToActiveFile: false,
 		});
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: true } } as any,
-			choice,
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: choice, app: app, selection: true });
 		const file = { path: "Test.md", basename: "Test", extension: "md" } as any;
 
 		(engine as any).getFormattedPathToCaptureTo = vi
@@ -342,9 +338,9 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 		(engine as any).onFileExists = vi.fn().mockResolvedValue({
 			file,
 			newFileContent: "Line A\nCAPTURE\nLine B",
+			priorContent: "",
 			captureContent: "CAPTURE\n",
-			cursorEndOffset: "Line A\nCAPTURE\n".length,
-			cursorPlacementSafe: true,
+			cursor: { kind: "offset", source: "defaultEnd", value: "Line A\nCAPTURE\n".length },
 		});
 
 		await engine.run();
@@ -368,12 +364,7 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 				focus: false,
 			},
 		});
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: true } } as any,
-			choice,
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: choice, selection: true });
 		const file = { path: "Test.md", basename: "Test", extension: "md" } as any;
 
 		(engine as any).getFormattedPathToCaptureTo = vi
@@ -383,15 +374,56 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 		(engine as any).onFileExists = vi.fn().mockResolvedValue({
 			file,
 			newFileContent: "CAPTURE",
+			priorContent: "",
 			captureContent: "CAPTURE",
-			cursorEndOffset: "CAPTURE".length,
-			cursorPlacementSafe: true,
+			cursor: { kind: "offset", source: "defaultEnd", value: "CAPTURE".length },
 		});
 
 		await engine.run();
 
 		expect(setMarkdownCursorAtOffset).not.toHaveBeenCalled();
 	});
+
+	it.each(["specifiedFile", "frontmatter", "focusedProperty"] as const)(
+		"invalidates a cursor before a same-file %s link rewrite can leave the editor stale",
+		async kind => {
+			for (const sameFile of [true, false]) {
+				vi.mocked(setMarkdownCursorAtOffset).mockClear();
+				const app = createApp();
+				const file = Object.assign(new TFile(), { path: "Test.md", basename: "Test", extension: "md" });
+				const destination = sameFile ? file : Object.assign(new TFile(), { path: "Other.md", extension: "md" });
+				vi.mocked(app.vault.getAbstractFileByPath).mockReturnValue(destination);
+				vi.mocked(app.workspace.getActiveFile).mockReturnValue(destination);
+				const executor = createExecutor();
+				if (kind === "focusedProperty") executor.focusedProperty = { file: destination, key: "related" };
+				const choice = createChoice({
+					openFile: true,
+					appendLink: {
+						enabled: true,
+						requireActiveFile: true,
+						placement: kind === "frontmatter" ? "inFrontmatter" : "replaceSelection",
+						destination: kind === "specifiedFile" ? { type: "specifiedFile", path: destination.path } : { type: "activeFile" },
+					},
+				});
+				const engine = createCaptureEngine({ app, choice, executor });
+				const insertLink = vi.fn(async () => {});
+				Object.assign(engine, {
+					getFormattedPathToCaptureTo: vi.fn(async () => file.path),
+					fileExists: vi.fn(async () => true),
+					onFileExists: vi.fn(async () => ({
+						file, newFileContent: "AB", captureContent: "AB", priorContent: "",
+						cursor: { kind: "offset", source: "marker", value: 1 },
+					})),
+					insertCaptureLink: insertLink,
+				});
+
+				await engine.run();
+
+				expect(insertLink).toHaveBeenCalledOnce();
+				expect(setMarkdownCursorAtOffset).toHaveBeenCalledTimes(sameFile ? 0 : 1);
+			}
+		},
+	);
 
 	it("does not override Templater cursor jumps", async () => {
 		vi.mocked(jumpToNextTemplaterCursorIfPossible).mockResolvedValue(true);
@@ -399,12 +431,7 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 			openFile: true,
 			captureToActiveFile: false,
 		});
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: true } } as any,
-			choice,
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: choice, selection: true });
 		const file = { path: "Test.md", basename: "Test", extension: "md" } as any;
 
 		(engine as any).getFormattedPathToCaptureTo = vi
@@ -414,9 +441,9 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 		(engine as any).onFileExists = vi.fn().mockResolvedValue({
 			file,
 			newFileContent: "CAPTURE",
+			priorContent: "",
 			captureContent: "CAPTURE",
-			cursorEndOffset: "CAPTURE".length,
-			cursorPlacementSafe: true,
+			cursor: { kind: "offset", source: "defaultEnd", value: "CAPTURE".length },
 		});
 
 		await engine.run();
@@ -424,18 +451,21 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 		expect(setMarkdownCursorAtOffset).not.toHaveBeenCalled();
 	});
 
-	it("does not place the cursor after whole-file Templater post-processing", async () => {
+	async function captureWithWholeFileTemplater(content: string, templater: (disk: string) => string) {
+		const app = createApp();
+		let disk = "";
+		app.vault.read = vi.fn(async () => disk);
+		app.vault.modify = vi.fn(async (_file: TFile, next: string) => { disk = next; });
+		vi.mocked(overwriteTemplaterOnce).mockImplementationOnce(async () => {
+			disk = templater(disk);
+			return true;
+		});
 		const choice = createChoice({
 			openFile: true,
 			captureToActiveFile: false,
 			templater: { afterCapture: "wholeFile" },
 		});
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: true } } as any,
-			choice,
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ app, choice, selection: true });
 		const file = { path: "Test.md", basename: "Test", extension: "md" } as any;
 
 		(engine as any).getFormattedPathToCaptureTo = vi
@@ -444,16 +474,29 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 		(engine as any).fileExists = vi.fn().mockResolvedValue(true);
 		(engine as any).onFileExists = vi.fn().mockResolvedValue({
 			file,
-			newFileContent: "CAPTURE",
-			captureContent: "CAPTURE",
-			cursorEndOffset: "CAPTURE".length,
-			cursorPlacementSafe: true,
+			newFileContent: content,
+			priorContent: "",
+			captureContent: content,
+			cursor: { kind: "offset", source: "defaultEnd", value: content.length },
 		});
 
 		await engine.run();
-
 		expect(overwriteTemplaterOnce).toHaveBeenCalled();
+		return { app, file, disk };
+	}
+
+	it("does not place the cursor after whole-file Templater rewrites the note", async () => {
+		const { disk } = await captureWithWholeFileTemplater("<% tp.file.title %> CAPTURE",
+			text => text.replace("<% tp.file.title %>", "Test"));
+
+		expect(disk).toBe("Test CAPTURE");
 		expect(setMarkdownCursorAtOffset).not.toHaveBeenCalled();
+	});
+
+	it("places the cursor when whole-file Templater leaves the note unchanged", async () => {
+		const { app, file } = await captureWithWholeFileTemplater("CAPTURE", text => text);
+
+		expect(setMarkdownCursorAtOffset).toHaveBeenCalledWith(app, file, "CAPTURE".length, "CAPTURE");
 	});
 
 	it("warns when FILE multi cannot become a YAML list in Capture", async () => {
@@ -466,12 +509,7 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 				format: "---\nrelated: {{FILE:People|multi}}\n---\n",
 			},
 		});
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			choice,
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: choice });
 		const file = { path: "Test.md", basename: "Test", extension: "md" } as any;
 
 		(engine as any).getFormattedPathToCaptureTo = vi
@@ -481,6 +519,7 @@ describe("CaptureChoiceEngine selection-as-value resolution", () => {
 		(engine as any).onFileExists = vi.fn().mockResolvedValue({
 			file,
 			newFileContent: "content",
+			priorContent: "",
 			captureContent: "content",
 		});
 
@@ -501,7 +540,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		vi.mocked(isFolder).mockReset();
 		vi.mocked(getMarkdownFilesInFolder).mockReset();
 		vi.mocked(getMarkdownFilesInFolder).mockReturnValue([]);
-		vi.mocked(insertFileLinkToActiveView).mockReset();
+		vi.mocked(insertFileLinkToCurrentNote).mockReset();
 		delete (InputSuggester as any).Suggest;
 		setTitleMock.mockClear();
 		singleTemplateRunMock.mockReset();
@@ -512,12 +551,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		const app = createApp();
 		vi.mocked(isFolder).mockReturnValue(true);
 
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "journals" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "journals" }), app: app });
 
 		const result = (engine as any).resolveCaptureTarget("journals");
 
@@ -528,12 +562,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		const app = createApp();
 		vi.mocked(isFolder).mockReturnValue(false);
 
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "journals/" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "journals/" }), app: app });
 
 		const result = (engine as any).resolveCaptureTarget("journals/");
 
@@ -544,12 +573,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		const app = createApp();
 		vi.mocked(isFolder).mockReturnValue(false);
 
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "journals\n/" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "journals\n/" }), app: app });
 
 		const result = (engine as any).resolveCaptureTarget("journals\n/");
 
@@ -565,12 +589,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 			Object.assign(new TFile(), { path: "journals.md" }),
 		);
 
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "journals" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "journals" }), app: app });
 
 		const result = (engine as any).resolveCaptureTarget("journals");
 
@@ -586,12 +605,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 			Object.assign(new TFolder(), { path: "journals.md" }),
 		);
 
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "journals" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "journals" }), app: app });
 
 		const result = (engine as any).resolveCaptureTarget("journals");
 
@@ -600,12 +614,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 
 	it("resolves a property:field=value target", () => {
 		const app = createApp();
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "property:type=draft" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "property:type=draft" }), app: app });
 
 		expect(
 			(engine as any).resolveCaptureTarget("property:type=draft"),
@@ -614,12 +623,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 
 	it("keeps a .md-bearing property value as a property target (no misroute)", () => {
 		const app = createApp();
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "property:type=draft.md" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "property:type=draft.md" }), app: app });
 
 		// The property branch must precede the .md/extension/folder checks so a
 		// value that happens to contain ".md" is matched literally, not as a file.
@@ -635,12 +639,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 
 	it("parses pipe filters on a property target", () => {
 		const app = createApp();
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "property:type=draft|folder:Notes" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "property:type=draft|folder:Notes" }), app: app });
 
 		expect(
 			(engine as any).resolveCaptureTarget("property:type=draft|folder:Notes"),
@@ -654,12 +653,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 
 	it("resolves a hashtag target with extra pipe filters", () => {
 		const app = createApp();
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "#work|tag:project" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "#work|tag:project" }), app: app });
 
 		expect(
 			(engine as any).resolveCaptureTarget("#work|tag:project"),
@@ -671,12 +665,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 
 	it("resolves repeated folder filters as a filtered target", () => {
 		const app = createApp();
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "folder:Goals|folder:Projects|tag:active" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "folder:Goals|folder:Projects|tag:active" }), app: app });
 
 		expect(
 			(engine as any).resolveCaptureTarget(
@@ -694,12 +683,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 
 	it("rejects multi-select on capture target filters", () => {
 		const app = createApp();
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "tag:work|multi" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "tag:work|multi" }), app: app });
 
 		expect(() =>
 			(engine as any).resolveCaptureTarget("tag:work|multi"),
@@ -708,12 +692,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 
 	it("throws on a property target with no field name", () => {
 		const app = createApp();
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "property:" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "property:" }), app: app });
 
 		expect(() => (engine as any).resolveCaptureTarget("property:")).toThrow(
 			ChoiceAbortError,
@@ -722,12 +701,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 
 	it("rejects explicit .base capture target paths", () => {
 		const app = createApp();
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "Boards/Kanban.base" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "Boards/Kanban.base" }), app: app });
 
 		expect(() =>
 			(engine as any).resolveCaptureTarget("Boards/Kanban.base"),
@@ -743,12 +717,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		);
 		// A vault-wide "Capture to" legitimately honours a preselected pick, so the
 		// `.base` guard is exercised on the path it actually uses.
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "" }),
-			executor,
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "" }), app: app, executor: executor });
 
 		await expect(
 			(engine as any).getFormattedPathToCaptureTo(false),
@@ -757,12 +726,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 
 	it("preserves explicit .canvas capture target paths", async () => {
 		const app = createApp();
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "Boards/Map.canvas" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "Boards/Map.canvas" }), app: app });
 
 		const result = await (engine as any).getFormattedPathToCaptureTo(false);
 
@@ -771,12 +735,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 
 	it("preserves explicit .CANVAS capture target paths", async () => {
 		const app = createApp();
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "Boards/Map.CANVAS" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "Boards/Map.CANVAS" }), app: app });
 
 		const result = await (engine as any).getFormattedPathToCaptureTo(false);
 
@@ -793,12 +752,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		// drive forms that normalizeGeneratedFilePath passes through.
 		for (const captureTo of ["C:/secret.md", "C:\\secret.md"]) {
 			const app = createApp();
-			const engine = new CaptureChoiceEngine(
-				app,
-				{ settings: { useSelectionAsCaptureValue: false } } as any,
-				createChoice({ captureTo }),
-				createExecutor(),
-			);
+			const engine = createCaptureEngine({ choice: createChoice({ captureTo }), app: app });
 
 			await expect(
 				(engine as any).getFormattedPathToCaptureTo(false),
@@ -814,12 +768,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		]);
 		(InputSuggester as any).Suggest = vi.fn(async () => "note");
 
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "Inbox/" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "Inbox/" }) });
 
 		const resolved = await (engine as any).selectFileInFolder("Inbox/", false);
 
@@ -834,12 +783,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		const suggestSpy = vi.fn(async () => "Inbox/Existing.md");
 		(InputSuggester as any).Suggest = suggestSpy;
 
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "Inbox\n/" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "Inbox\n/" }) });
 
 		const resolved = await (engine as any).getFormattedPathToCaptureTo(false);
 
@@ -863,19 +807,14 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		const app = createApp() as any;
 		app.workspace.getLastOpenFiles = () => ["Inbox/Zebra.md"];
 
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({
+		const engine = createCaptureEngine({ choice: createChoice({
 				captureTo: "Inbox/",
 				createFileIfItDoesntExist: {
 					enabled: true,
 					createWithTemplate: false,
 					template: "",
 				},
-			}),
-			createExecutor(),
-		);
+			}), app: app });
 
 		await (engine as any).selectFileInFolder("Inbox/", false);
 
@@ -908,6 +847,58 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		expect(options.customValueLabel("New")).toBe("Create new note: New");
 	});
 
+	it("highlights a match in a titled note's file name on its path line", async () => {
+		const file = Object.assign(new TFile(), {
+			path: "People/Thomas Anderson.md",
+			name: "Thomas Anderson.md",
+			basename: "Thomas Anderson",
+			extension: "md",
+		});
+		vi.mocked(getMarkdownFilesInFolder).mockReturnValue([file]);
+		const suggestSpy = vi.fn(async () => file.path);
+		(InputSuggester as any).Suggest = suggestSpy;
+		const app = createApp() as any;
+		app.vault.getAbstractFileByPath = vi.fn((path: string) => (path === file.path ? file : null));
+		app.metadataCache.getFileCache = vi.fn(() => ({ frontmatter: { title: "The Matrix" } }));
+
+		await (createCaptureEngine({ choice: createChoice({ captureTo: "People/" }), app }) as any)
+			.selectFileInFolder("People/", false);
+
+		const options = (suggestSpy.mock.calls[0] as unknown as [unknown, unknown, unknown, {
+			searchItems: string[];
+			renderItem: (path: string, el: HTMLElement, matches: SearchMatches) => void;
+		}])[3];
+		const found = prepareFuzzySearch("thomas")(options.searchItems[0]);
+		const el = document.createElement("div");
+		options.renderItem(file.path, el, found?.matches ?? []);
+		expect(el.querySelector(".suggestion-title")?.textContent).toBe("The Matrix");
+		expect(Array.from(el.querySelectorAll(".suggestion-highlight"), (span) => span.textContent))
+			.toEqual(["Thomas"]);
+	});
+
+	it("captures into the note whose alias a remote client typed, instead of creating one (#2062)", async () => {
+		const file = Object.assign(new TFile(), {
+			path: "People/Thomas Anderson.md",
+			name: "Thomas Anderson.md",
+			basename: "Thomas Anderson",
+			extension: "md",
+		});
+		vi.mocked(getMarkdownFilesInFolder).mockReturnValue([file]);
+		const app = createApp() as any;
+		app.metadataCache.getFileCache = vi.fn(() => ({ frontmatter: { aliases: ["Neo", "The One"] } }));
+		// A Raycast client typed "neo" and chose its "Use custom value" row.
+		const suggester = vi.fn(async () => "neo");
+		const executor = { ...createExecutor(), interactive: true, promptProvider: { suggester } } as unknown as IChoiceExecutor;
+		const choice = createChoice({
+			captureTo: "People/",
+			createFileIfItDoesntExist: { enabled: true, createWithTemplate: false, template: "" },
+		});
+
+		await expect((createCaptureEngine({ choice, app, executor }) as any).selectFileInFolder("People/", false))
+			.resolves.toBe("People/Thomas Anderson.md");
+		expect(suggester).toHaveBeenCalledTimes(1);
+	});
+
 	it("suppresses folder create rows for values that normalize to existing files", async () => {
 		vi.mocked(getMarkdownFilesInFolder).mockReturnValue([
 			{ path: "Inbox/Apple.md", basename: "Apple" },
@@ -920,19 +911,14 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 			path === "Inbox/Line Break.md" ? { path } : null,
 		);
 
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({
+		const engine = createCaptureEngine({ choice: createChoice({
 				captureTo: "Inbox/",
 				createFileIfItDoesntExist: {
 					enabled: true,
 					createWithTemplate: false,
 					template: "",
 				},
-			}),
-			createExecutor(),
-		);
+			}), app: app });
 
 		await (engine as any).selectFileInFolder("Inbox/", false);
 
@@ -943,12 +929,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 	});
 
 	it("suppresses vault create rows for basenames normalized to existing files", () => {
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice(),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine();
 
 		expect(
 			(engine as any).captureTargetAlreadyExists(
@@ -966,12 +947,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		const suggestSpy = vi.fn(async () => "Inbox/Apple.md");
 		(InputSuggester as any).Suggest = suggestSpy;
 
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "Inbox/" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "Inbox/" }) });
 
 		await (engine as any).selectFileInFolder("Inbox/", false);
 
@@ -986,19 +962,14 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		const suggestSpy = vi.fn(async () => "New From Empty");
 		(InputSuggester as any).Suggest = suggestSpy;
 
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({
+		const engine = createCaptureEngine({ choice: createChoice({
 				captureTo: "Inbox/",
 				createFileIfItDoesntExist: {
 					enabled: true,
 					createWithTemplate: false,
 					template: "",
 				},
-			}),
-			createExecutor(),
-		);
+			}) });
 
 		const resolved = await (engine as any).selectFileInFolder("Inbox", false);
 
@@ -1029,12 +1000,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		const suggestSpy = vi.fn();
 		(InputSuggester as any).Suggest = suggestSpy;
 
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "Inbox/" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "Inbox/" }) });
 
 		await expect(
 			(engine as any).selectFileInFolder("Inbox", false),
@@ -1047,19 +1013,14 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		const suggestSpy = vi.fn(async () => "New From Empty");
 		(InputSuggester as any).Suggest = suggestSpy;
 
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({
+		const engine = createCaptureEngine({ choice: createChoice({
 				captureTo: "#empty",
 				createFileIfItDoesntExist: {
 					enabled: true,
 					createWithTemplate: false,
 					template: "",
 				},
-			}),
-			createExecutor(),
-		);
+			}) });
 
 		const resolved = await (engine as any).getFormattedPathToCaptureTo(false);
 
@@ -1096,19 +1057,14 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 			{ path: "Archive/Existing.md", basename: "Existing" },
 		]);
 
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({
+		const engine = createCaptureEngine({ choice: createChoice({
 				captureTo: "property:type=draft",
 				createFileIfItDoesntExist: {
 					enabled: true,
 					createWithTemplate: false,
 					template: "",
 				},
-			}),
-			createExecutor(),
-		);
+			}), app: app });
 
 		const resolved = await (engine as any).getFormattedPathToCaptureTo(false);
 
@@ -1130,12 +1086,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		const suggestSpy = vi.fn();
 		(InputSuggester as any).Suggest = suggestSpy;
 
-		const engine = new CaptureChoiceEngine(
-			createApp(),
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureTo: "#empty" }),
-			createExecutor(),
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureTo: "#empty" }) });
 
 		await expect(
 			(engine as any).getFormattedPathToCaptureTo(false),
@@ -1147,18 +1098,13 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		const app = createApp() as any;
 		app.vault.read = vi.fn(async () => "");
 
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({
+		const engine = createCaptureEngine({ choice: createChoice({
 				createFileIfItDoesntExist: {
 					enabled: true,
 					createWithTemplate: false,
 					template: "",
 				},
-			}),
-			createExecutor(),
-		);
+			}), app: app });
 
 		(engine as any).createFileWithInput = vi.fn(async (path: string) => ({
 			path,
@@ -1365,6 +1311,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		const onFileExists = vi.fn(async () => ({
 			file: { path: "Bad: Title.md", basename: "Bad: Title" },
 			newFileContent: "",
+			priorContent: "",
 			captureContent: "x",
 		}));
 		(engine as any).onFileExists = onFileExists;
@@ -1420,9 +1367,9 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 			configurable: true,
 		});
 
-		store.beginExecutionScope();
+		const draftScope = store.beginExecutionScope();
 		await engine.run();
-		store.commitExecutionScope();
+		store.commitExecutionScope(draftScope);
 
 		expect(store.get(draftKey)).toBe("Capture body to preserve");
 		expect(clipboardWriteText).not.toHaveBeenCalled();
@@ -1468,9 +1415,9 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 			}),
 		);
 
-		store.beginExecutionScope();
+		const retryScope = store.beginExecutionScope();
 		await successfulEngine.run();
-		store.commitExecutionScope();
+		store.commitExecutionScope(retryScope);
 
 		expect(promptHydratedValues).toContain("Capture body to preserve");
 		expect(store.get(draftKey)).toBeUndefined();
@@ -1583,21 +1530,18 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		);
 		app.vault.modify = vi.fn(async () => {});
 
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({
+		const engine = createCaptureEngine({ choice: createChoice({
 				captureToActiveFile: true,
 				activeFileWritePosition: "top",
-			}),
-			createExecutor(),
-		);
+			}), app: app });
 
 		const fileExistsMock = vi.fn(async () => true);
 		const onFileExistsMock = vi.fn(async () => ({
 			file: linkedFile,
 			newFileContent: "updated",
+			priorContent: "",
 			captureContent: "capture",
+			cursor: { kind: "none" },
 		}));
 		(engine as any).fileExists = fileExistsMock;
 		(engine as any).onFileExists = onFileExistsMock;
@@ -1609,12 +1553,13 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		expect(onFileExistsMock).toHaveBeenCalledWith(
 			"Folder/Note.md",
 			expect.any(String),
+			false,
 		);
 		expect(app.vault.modify).toHaveBeenCalledWith(linkedFile, "updated");
 	});
 
 	it("skips required append-link insertion for canvas file-card capture without markdown context", async () => {
-		vi.mocked(insertFileLinkToActiveView).mockImplementation(() => {
+		vi.mocked(insertFileLinkToCurrentNote).mockImplementation(() => {
 			throw new Error("link insertion should be skipped");
 		});
 
@@ -1641,38 +1586,35 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 			},
 		};
 		app.workspace.getActiveFile = vi.fn(() => canvasFile);
-		app.workspace.getActiveViewOfType = vi.fn(() => null);
+		app.workspace.getActiveViewOfType = activeViewOfType();
 		app.vault.getAbstractFileByPath = vi.fn((path: string) =>
 			path === "Folder/Note.md" ? linkedFile : null,
 		);
 		app.vault.modify = vi.fn(async () => {});
 
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({
+		const engine = createCaptureEngine({ choice: createChoice({
 				appendLink: true,
 				captureToActiveFile: true,
 				activeFileWritePosition: "top",
-			}),
-			createExecutor(),
-		);
+			}), app: app });
 
 		(engine as any).fileExists = vi.fn(async () => true);
 		(engine as any).onFileExists = vi.fn(async () => ({
 			file: linkedFile,
 			newFileContent: "updated",
+			priorContent: "",
 			captureContent: "capture",
+			cursor: { kind: "none" },
 		}));
 
 		await engine.run();
 
 		expect(app.vault.modify).toHaveBeenCalledWith(linkedFile, "updated");
-		expect(insertFileLinkToActiveView).not.toHaveBeenCalled();
+		expect(insertFileLinkToCurrentNote).not.toHaveBeenCalled();
 	});
 
 	it("does not skip configured frontmatter link insertion for canvas file-card capture", async () => {
-		vi.mocked(insertFileLinkToActiveView).mockImplementation(() => {
+		vi.mocked(insertFileLinkToCurrentNote).mockImplementation(() => {
 			throw new Error("frontmatter link insertion failed");
 		});
 
@@ -1699,7 +1641,8 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 			},
 		};
 		app.workspace.getActiveFile = vi.fn(() => canvasFile);
-		app.workspace.getActiveViewOfType = vi.fn(() => null);
+		app.workspace.getActiveViewOfType = activeViewOfType();
+		app.vault.read = vi.fn(async () => "existing");
 		app.vault.getAbstractFileByPath = vi.fn((path: string) =>
 			path === "Folder/Note.md" ? linkedFile : null,
 		);
@@ -1735,6 +1678,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		(engine as any).onFileExists = vi.fn(async () => ({
 			file: linkedFile,
 			newFileContent: "updated",
+			cursor: { kind: "none" },
 			captureContent: "capture",
 			// Stated, so the `effect: "changed"` assertion below rests on a real
 			// comparison. Left undefined, `newFileContent !== priorContent` is
@@ -1750,18 +1694,21 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 			file: linkedFile,
 			effect: "changed",
 		});
-		expect(insertFileLinkToActiveView).toHaveBeenCalledWith(
+		expect(insertFileLinkToCurrentNote).toHaveBeenCalledWith(
 			app,
 			linkedFile,
+			canvasFile,
 			expect.objectContaining({
 				...appendLink,
 				destination: { type: "activeFile" },
 			}),
+			undefined,
+			false,
 		);
 	});
 
 	it("skips required append-link insertion for active canvas text-card capture without markdown context", async () => {
-		vi.mocked(insertFileLinkToActiveView).mockImplementation(() => {
+		vi.mocked(insertFileLinkToCurrentNote).mockImplementation(() => {
 			throw new Error("link insertion should be skipped");
 		});
 
@@ -1796,27 +1743,22 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 			basename: "Map",
 			extension: "canvas",
 		}));
-		app.workspace.getActiveViewOfType = vi.fn(() => null);
+		app.workspace.getActiveViewOfType = activeViewOfType();
 
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({
+		const engine = createCaptureEngine({ choice: createChoice({
 				appendLink: true,
 				captureToActiveFile: true,
 				activeFileWritePosition: "top",
-			}),
-			createExecutor(),
-		);
+			}), app: app });
 
 		await engine.run();
 
 		expect(setTextMock).toHaveBeenCalled();
-		expect(insertFileLinkToActiveView).not.toHaveBeenCalled();
+		expect(insertFileLinkToCurrentNote).not.toHaveBeenCalled();
 	});
 
 	it("does not delete a clipboard attachment after a canvas text-card write if later link insertion fails", async () => {
-		vi.mocked(insertFileLinkToActiveView).mockImplementation(() => {
+		vi.mocked(insertFileLinkToCurrentNote).mockImplementation(() => {
 			throw new Error("link insertion failed after canvas write");
 		});
 
@@ -1850,7 +1792,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 			},
 		};
 		app.workspace.getActiveFile = vi.fn(() => canvasFile);
-		app.workspace.getActiveViewOfType = vi.fn(() => ({ editor: {} }));
+		app.workspace.getActiveViewOfType = activeViewOfType({ editor: {} });
 		app.vault.getAbstractFileByPath = vi.fn((path: string) =>
 			path === "Clipboard image.png" ? attachmentFile : null,
 		);
@@ -1875,7 +1817,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		await engine.run();
 
 		expect(setTextMock).toHaveBeenCalledWith("![[Clipboard image.png]]");
-		expect(insertFileLinkToActiveView).toHaveBeenCalled();
+		expect(insertFileLinkToCurrentNote).toHaveBeenCalled();
 		expect(app.fileManager.trashFile).not.toHaveBeenCalledWith(attachmentFile);
 	});
 
@@ -1892,7 +1834,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		};
 
 		const app = createApp() as any;
-		app.vault.read = vi.fn(async () =>
+		app.vault.read = vi.fn(async (file: TFile) => file === createdFile ? "" :
 			JSON.stringify({
 				nodes: [{ id: "node-1", type: "file", file: "Folder/Missing.md" }],
 			}),
@@ -1902,10 +1844,7 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		);
 		app.vault.modify = vi.fn(async () => {});
 
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({
+		const engine = createCaptureEngine({ choice: createChoice({
 				captureTo: "Boards/Plan.canvas",
 				captureToCanvasNodeId: "node-1",
 				createFileIfItDoesntExist: {
@@ -1913,15 +1852,14 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 					createWithTemplate: false,
 					template: "",
 				},
-			}),
-			createExecutor(),
-		);
+			}), app: app });
 
 		const fileExistsMock = vi.fn(async () => false);
 		const onCreateFileIfItDoesntExistMock = vi.fn(
 			async (_path: string, _capture: string) => ({
 				file: createdFile,
 				newFileContent: "created",
+				priorContent: "",
 				captureContent: "capture",
 			}),
 		);
@@ -1963,14 +1901,9 @@ describe("CaptureChoiceEngine capture target resolution", () => {
 		app.vault.getAbstractFileByPath = vi.fn();
 		app.vault.modify = vi.fn(async () => {});
 
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({
+		const engine = createCaptureEngine({ choice: createChoice({
 				captureToActiveFile: true,
-			}),
-			createExecutor(),
-		);
+			}), app: app });
 
 		const fileExistsMock = vi.fn();
 		const onFileExistsMock = vi.fn();
@@ -1999,12 +1932,7 @@ describe("CaptureChoiceEngine reserved capture-target variable (security)", () =
 				preselected,
 			);
 		}
-		return new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice(choice),
-			executor,
-		);
+		return createCaptureEngine({ choice: createChoice(choice), app: app, executor: executor });
 	};
 
 	// The reserved variable is attacker-injectable across QuickAdd's trust
@@ -2038,12 +1966,7 @@ describe("CaptureChoiceEngine reserved capture-target variable (security)", () =
 			QA_INTERNAL_CAPTURE_TARGET_FILE_PATH,
 			"Secrets/payload.md",
 		);
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({ captureToActiveFile: true }),
-			executor,
-		);
+		const engine = createCaptureEngine({ choice: createChoice({ captureToActiveFile: true }), app: app, executor: executor });
 
 		const result = await (engine as any).getFormattedPathToCaptureTo(true);
 
@@ -2127,19 +2050,14 @@ describe("CaptureChoiceEngine reserved capture-target variable (security)", () =
 			QA_INTERNAL_CAPTURE_TARGET_FILE_PATH,
 			"Work/Fresh.md",
 		);
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({
+		const engine = createCaptureEngine({ choice: createChoice({
 				captureTo: "tag:work",
 				createFileIfItDoesntExist: {
 					enabled: true,
 					createWithTemplate: false,
 					template: "",
 				},
-			}),
-			executor,
-		);
+			}), app: app, executor: executor });
 
 		const result = await (engine as any).getFormattedPathToCaptureTo(false);
 
@@ -2165,19 +2083,14 @@ describe("CaptureChoiceEngine reserved capture-target variable (security)", () =
 			QA_INTERNAL_CAPTURE_TARGET_FILE_PATH,
 			"Secrets/Dangerous.md",
 		);
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({
+		const engine = createCaptureEngine({ choice: createChoice({
 				captureTo: "tag:work",
 				createFileIfItDoesntExist: {
 					enabled: true,
 					createWithTemplate: false,
 					template: "",
 				},
-			}),
-			executor,
-		);
+			}), app: app, executor: executor });
 
 		const result = await (engine as any).getFormattedPathToCaptureTo(false);
 
@@ -2203,19 +2116,14 @@ describe("CaptureChoiceEngine reserved capture-target variable (security)", () =
 			QA_INTERNAL_CAPTURE_TARGET_FILE_PATH,
 			"Secrets/Dangerous.md ", // trailing space
 		);
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({
+		const engine = createCaptureEngine({ choice: createChoice({
 				captureTo: "tag:work",
 				createFileIfItDoesntExist: {
 					enabled: true,
 					createWithTemplate: false,
 					template: "",
 				},
-			}),
-			executor,
-		);
+			}), app: app, executor: executor });
 
 		// Rejected -> falls through to the (cancelling) picker, never honoured.
 		await expect(
@@ -2239,19 +2147,14 @@ describe("CaptureChoiceEngine reserved capture-target variable (security)", () =
 		(InputSuggester as any).Suggest = suggestSpy;
 		const executor = createExecutor();
 		executor.variables.set(QA_INTERNAL_CAPTURE_TARGET_FILE_PATH, "Daily");
-		const engine = new CaptureChoiceEngine(
-			app,
-			{ settings: { useSelectionAsCaptureValue: false } } as any,
-			createChoice({
+		const engine = createCaptureEngine({ choice: createChoice({
 				captureTo: "tag:work",
 				createFileIfItDoesntExist: {
 					enabled: true,
 					createWithTemplate: false,
 					template: "",
 				},
-			}),
-			executor,
-		);
+			}), app: app, executor: executor });
 
 		await expect(
 			(engine as any).getFormattedPathToCaptureTo(false),

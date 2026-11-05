@@ -1,47 +1,10 @@
+// @vitest-environment jsdom
 import { createChoiceExecutor } from "../../tests/helpers/createChoiceExecutor";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../quickAddSettingsTab", () => {
-	const defaultSettings = {
-		choices: [],
-		inputPrompt: "single-line",
-		devMode: false,
-		templateFolderPaths: [],
-		useSelectionAsCaptureValue: true,
-		announceUpdates: "major",
-		version: "0.0.0",
-		globalVariables: {},
-		onePageInputEnabled: false,
-		disableOnlineFeatures: true,
-		enableRibbonIcon: false,
-		showCaptureNotification: true,
-		showInputCancellationNotification: true,
-		enableTemplatePropertyTypes: false,
-		ai: {
-			defaultModel: "Ask me",
-			defaultSystemPrompt: "",
-			promptTemplatesFolderPath: "",
-			showAssistant: true,
-			providers: [],
-		},
-		migrations: {
-			migrateToMacroIDFromEmbeddedMacro: true,
-			useQuickAddTemplateFolder: false,
-			incrementFileNameSettingMoveToDefaultBehavior: false,
-			consolidateFileExistsBehavior: false,
-			mutualExclusionInsertAfterAndWriteToBottomOfFile: false,
-			setVersionAfterUpdateModalRelease: false,
-			addDefaultAIProviders: false,
-			removeMacroIndirection: false,
-			migrateFileOpeningSettings: false,
-			backfillFileOpeningDefaults: false,
-		},
-	};
-
-	return {
-		DEFAULT_SETTINGS: defaultSettings,
-		QuickAddSettingsTab: class {},
-	};
+vi.mock("../quickAddSettingsTab", async () => {
+	const { engineSettingsMock } = await import("../../tests/helpers/engines/settings");
+	return engineSettingsMock();
 });
 
 const {
@@ -66,17 +29,14 @@ vi.mock("../formatters/captureChoiceFormatter", () => {
 		async formatContentOnly(content: string) {
 			return content;
 		}
-		async formatContentWithFile(_content: string) {
-			return "";
+		async insertFormattedContent(content: string) {
+			return { content: "", captureContent: content, cursor: { kind: "none" } };
 		}
 		async formatFileName(name: string) {
 			return name;
 		}
 		getAndClearTemplatePropertyVars() {
 			return new Map();
-		}
-		getCaptureInsertionEndOffset() {
-			return undefined;
 		}
 		consumeCreatedClipboardAttachmentPaths() {
 			return [];
@@ -93,16 +53,22 @@ vi.mock("../utils/fileLinks", () => ({
 	getAppendLinkDestinationFile: getAppendLinkDestinationFileMock,
 }));
 
-vi.mock("../utilityObsidian", () => ({
+vi.mock("../utils/editorInsertion", () => ({
 	appendToCurrentLine: vi.fn(),
-	getMarkdownFilesInFolder: vi.fn(async () => []),
-	getMarkdownFilesWithTag: vi.fn(async () => []),
-	insertFileLinkToActiveView: vi.fn(),
+	insertFileLinkToCurrentNote: vi.fn(),
 	insertOnNewLineAbove: vi.fn(),
 	insertOnNewLineBelow: vi.fn(),
+}));
+vi.mock("../utils/vaultQueries", () => ({
+	getMarkdownFilesInFolder: vi.fn(async () => []),
+	getMarkdownFilesWithTag: vi.fn(async () => []),
 	isFolder: vi.fn(() => false),
+}));
+vi.mock("../utils/fileOpening", () => ({
 	openExistingFileTab: vi.fn(() => null),
 	openFile: vi.fn(),
+}));
+vi.mock("../utils/templaterIntegration", () => ({
 	overwriteTemplaterOnce: vi.fn(),
 	templaterParseTemplate: vi.fn(async (_app, content) => content),
 	getTemplater: vi.fn(() => ({})),
@@ -119,10 +85,6 @@ vi.mock("src/gui/InputSuggester/inputSuggester", () => ({
 
 vi.mock("../main", () => ({
 	default: class QuickAddMock {},
-}));
-
-vi.mock("obsidian-dataview", () => ({
-	getAPI: vi.fn(),
 }));
 
 import { TFile, type App } from "obsidian";
@@ -201,6 +163,8 @@ const createEngine = (abortError: Error) => {
 		},
 		workspace: {
 			getActiveFile: vi.fn(() => null),
+			getActiveViewOfType: vi.fn(() => null),
+			getLeavesOfType: vi.fn(() => []),
 		},
 		fileManager: {
 			getNewFileParent: vi.fn(() => ({ path: "" })),
@@ -316,6 +280,8 @@ describe("CaptureChoiceEngine cancellation notices", () => {
 			},
 			workspace: {
 				getActiveFile: vi.fn(() => null),
+				getActiveViewOfType: vi.fn(() => null),
+				getLeavesOfType: vi.fn(() => []),
 			},
 			fileManager: {
 				getNewFileParent: vi.fn(() => ({ path: "" })),
@@ -359,6 +325,7 @@ describe("CaptureChoiceEngine append-link destination", () => {
 	function createAppendLinkHarness() {
 		const captureFile = createTestFile("Daily/Test.md");
 		const destinationFile = createTestFile("Indexes/MOC.md");
+		const disk = { content: "existing" };
 		const app = {
 			vault: {
 				adapter: {
@@ -367,13 +334,14 @@ describe("CaptureChoiceEngine append-link destination", () => {
 				getAbstractFileByPath: vi.fn((path: string) =>
 					path === captureFile.path ? captureFile : null,
 				),
-				read: vi.fn(async () => "existing"),
-				modify: vi.fn(),
+				read: vi.fn(async () => disk.content),
+				process: vi.fn(async (_file: TFile, fn: (content: string) => string) => (disk.content = fn(disk.content))),
 				create: vi.fn(),
 			},
 			workspace: {
 				getActiveFile: vi.fn(() => null),
 				getActiveViewOfType: vi.fn(() => null),
+				getLeavesOfType: vi.fn(() => []),
 			},
 			fileManager: {
 				getNewFileParent: vi.fn(() => ({ path: "" })),
@@ -403,6 +371,7 @@ describe("CaptureChoiceEngine append-link destination", () => {
 
 		return {
 			app,
+			disk,
 			captureFile,
 			choice,
 			destinationFile,
@@ -412,14 +381,14 @@ describe("CaptureChoiceEngine append-link destination", () => {
 	}
 
 	it("copies the captured file link after committing without append-link insertion", async () => {
-		const { app, captureFile, choice, choiceExecutor, engine } =
+		const { disk, captureFile, choice, choiceExecutor, engine } =
 			createAppendLinkHarness();
 		choice.appendLink = false;
 		choice.copyLinkToClipboard = true;
 
 		await engine.run();
 
-		expect(app.vault.modify).toHaveBeenCalledWith(captureFile, "");
+		expect(disk.content).toBe("");
 		expect(choiceExecutor.recordExecutionResult).toHaveBeenCalledWith({
 			status: "success",
 			file: captureFile,
@@ -430,7 +399,7 @@ describe("CaptureChoiceEngine append-link destination", () => {
 	});
 
 	it("keeps capture execution successful when clipboard copying throws", async () => {
-		const { app, captureFile, choice, choiceExecutor, engine } =
+		const { disk, captureFile, choice, choiceExecutor, engine } =
 			createAppendLinkHarness();
 		choice.appendLink = false;
 		choice.copyLinkToClipboard = true;
@@ -440,7 +409,7 @@ describe("CaptureChoiceEngine append-link destination", () => {
 
 		await engine.run();
 
-		expect(app.vault.modify).toHaveBeenCalledWith(captureFile, "");
+		expect(disk.content).toBe("");
 		expect(copyFileLinkToClipboardMock).toHaveBeenCalledWith(captureFile);
 		expect(choiceExecutor.recordExecutionResult).toHaveBeenCalledWith({
 			status: "success",
@@ -450,13 +419,13 @@ describe("CaptureChoiceEngine append-link destination", () => {
 	});
 
 	it("appends the captured file link to a specified destination without an active editor", async () => {
-		const { app, captureFile, destinationFile, choiceExecutor, engine } =
+		const { app, disk, captureFile, destinationFile, choiceExecutor, engine } =
 			createAppendLinkHarness();
 		getAppendLinkDestinationFileMock.mockReturnValue(destinationFile);
 
 		await engine.run();
 
-		expect(app.vault.modify).toHaveBeenCalledWith(captureFile, "");
+		expect(disk.content).toBe("");
 		expect(choiceExecutor.recordExecutionResult).toHaveBeenCalledWith({
 			status: "success",
 			file: captureFile,
@@ -469,6 +438,7 @@ describe("CaptureChoiceEngine append-link destination", () => {
 				destination: { type: "specifiedFile", path: destinationFile.path },
 				linkType: "link",
 			}),
+			undefined,
 		);
 	});
 
@@ -480,7 +450,7 @@ describe("CaptureChoiceEngine append-link destination", () => {
 		await engine.run();
 
 		expect(app.vault.adapter.exists).not.toHaveBeenCalled();
-		expect(app.vault.modify).not.toHaveBeenCalled();
+		expect(app.vault.process).not.toHaveBeenCalled();
 		// This exit used to record NOTHING, so `executeWithOutcome` produced a
 		// reason-less error and the CLI substituted its fixed sentence - #1603's exact
 		// symptom, reachable without any throw. It now carries the message the desktop

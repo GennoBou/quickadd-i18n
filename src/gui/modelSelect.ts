@@ -1,7 +1,7 @@
 import type { DropdownComponent } from "obsidian";
 import { resolveModel } from "src/ai/aiHelpers";
 import type { ModelRef } from "src/ai/Provider";
-import { activeModelRef } from "src/ai/Provider";
+import { activeModelRef, sortModelsForDisplay } from "src/ai/Provider";
 import { settingsStore } from "src/settingsStore";
 
 /**
@@ -38,7 +38,6 @@ export function populateModelDropdown(
 ): void {
 	const providers = settingsStore.getState().ai.providers;
 	const selectEl = dropdown.selectEl;
-	const doc = selectEl.ownerDocument;
 
 	// A ref that no longer matches the legacy string is stale (older QuickAdd
 	// edited the command); the string is what the user last visibly chose.
@@ -60,21 +59,20 @@ export function populateModelDropdown(
 	for (const provider of providers) {
 		if (provider.models.length === 0) continue;
 
-		const group = doc.createElement("optgroup");
+		const group = selectEl.createEl("optgroup");
 		group.label = provider.name;
-		selectEl.appendChild(group);
 
-		for (const model of provider.models) {
+		for (const model of sortModelsForDisplay(provider.models)) {
 			const value = `${provider.id ?? provider.name}/${model.name}:${index++}`;
 			entriesByValue.set(value, {
 				providerId: provider.id,
 				modelName: model.name,
 			});
 
-			const option = doc.createElement("option");
-			option.value = value;
-			option.text = model.name;
-			group.appendChild(option);
+			group.createEl("option", {
+				value,
+				text: model.deprecated ? `${model.name} (retired)` : model.name,
+			});
 		}
 	}
 
@@ -124,29 +122,15 @@ function findSelectedValue(
 ): string | undefined {
 	if (!current.model || current.model === ASK_ME) return ASK_ME;
 
-	if (current.modelRef) {
-		for (const [value, entry] of entriesByValue) {
-			if (
-				entry.providerId === current.modelRef.providerId &&
-				entry.modelName === current.modelRef.name
-			) {
-				return value;
-			}
-		}
-		return undefined;
-	}
-
-	// Legacy bare name: preselect the provider the runtime would first-match.
-	// Silent — rendering a dropdown must not consume the runtime warn-once budget.
-	const resolved = resolveModel(current.model, { silent: true });
-	if (!resolved) return undefined;
+	// Rendering must not consume the runtime warning budget for dangling refs.
+	const resolved = current.modelRef ? undefined : resolveModel(current.model, { silent: true });
+	const target = current.modelRef ?? (resolved && {
+		providerId: resolved.provider.id,
+		name: resolved.model.name,
+	});
+	if (!target) return undefined;
 	for (const [value, entry] of entriesByValue) {
-		if (
-			entry.providerId === resolved.provider.id &&
-			entry.modelName === resolved.model.name
-		) {
-			return value;
-		}
+		if (entry.providerId === target.providerId && entry.modelName === target.name) return value;
 	}
 	return undefined;
 }

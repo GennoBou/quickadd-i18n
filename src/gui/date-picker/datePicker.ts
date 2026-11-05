@@ -1,4 +1,7 @@
-export type DatePickerSelectSource = "picker" | "action";
+import { setIcon } from "obsidian";
+import { settingsStore } from "../../settingsStore";
+
+type DatePickerSelectSource = "picker" | "action";
 
 export interface DatePickerController {
 	setSelectedIso(
@@ -9,7 +12,7 @@ export interface DatePickerController {
 	destroy(): void;
 }
 
-export interface DatePickerOptions {
+interface DatePickerOptions {
 	container: HTMLElement;
 	initialIso?: string;
 	weekStartsOn?: number;
@@ -97,11 +100,20 @@ export const toIsoFromParts = (
 	return `${dateKey}T${pad(time.hour)}:${pad(time.minute)}:00`;
 };
 
-/** Reads HH:mm out of a `...THH:mm` or `... HH:mm` ISO; null when absent. */
+/**
+ * Reads the local wall-clock HH:mm of a `...THH:mm` or `... HH:mm` ISO; null
+ * when absent. A zoned ISO (`Z` or `±hh:mm`, e.g. a typed date stored with
+ * `toISOString()`) is converted to local time, like the note text formats it.
+ */
 export const extractTimeFromIso = (iso?: string): TimeParts | null => {
 	if (!iso) return null;
 	const match = /[T ](\d{2}):(\d{2})/.exec(iso);
 	if (!match) return null;
+	if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(iso)) {
+		const date = new Date(iso);
+		if (Number.isNaN(date.getTime())) return null;
+		return { hour: date.getHours(), minute: date.getMinutes() };
+	}
 	const hour = Number.parseInt(match[1], 10);
 	const minute = Number.parseInt(match[2], 10);
 	if (Number.isNaN(hour) || Number.isNaN(minute)) return null;
@@ -128,23 +140,27 @@ export const createDatePicker = (
 		? extractTimeFromIso(options.initialIso) ?? { hour: 0, minute: 0 }
 		: null;
 
+	// The text field next to the calendar is the keyboard path, so every
+	// calendar control stays out of the tab order and Tab moves to the next field.
 	const root = options.container.createDiv({ cls: "qa-date-picker" });
 
 	const header = root.createDiv({ cls: "qa-date-picker__header" });
 	const prevBtn = header.createEl("button", {
-		cls: "qa-date-picker__nav",
-		text: "‹",
+		cls: "qa-date-picker__nav clickable-icon",
 	});
+	setIcon(prevBtn, "chevron-left");
 	prevBtn.type = "button";
+	prevBtn.tabIndex = -1;
 	prevBtn.setAttr("aria-label", "Previous month");
 
 	const label = header.createDiv({ cls: "qa-date-picker__label" });
 
 	const nextBtn = header.createEl("button", {
-		cls: "qa-date-picker__nav",
-		text: "›",
+		cls: "qa-date-picker__nav clickable-icon",
 	});
+	setIcon(nextBtn, "chevron-right");
 	nextBtn.type = "button";
+	nextBtn.tabIndex = -1;
 	nextBtn.setAttr("aria-label", "Next month");
 
 	const weekdayRow = root.createDiv({ cls: "qa-date-picker__weekdays" });
@@ -161,12 +177,14 @@ export const createDatePicker = (
 		text: "Today",
 	});
 	todayBtn.type = "button";
+	todayBtn.tabIndex = -1;
 
 	const clearBtn = actions.createEl("button", {
 		cls: "qa-date-picker__action",
 		text: "Clear",
 	});
 	clearBtn.type = "button";
+	clearBtn.tabIndex = -1;
 
 	let timeInput: HTMLInputElement | undefined;
 	if (withTime) {
@@ -175,8 +193,12 @@ export const createDatePicker = (
 			cls: "qa-date-picker__time-label",
 			text: "Time",
 		});
-		timeInput = timeRow.createEl("input", { cls: "qa-date-picker__time-input" });
+		timeInput = timeRow.createEl("input", {
+			cls: "qa-date-picker__time-input",
+			attr: { "aria-label": "Time" },
+		});
 		timeInput.type = "time";
+		timeInput.tabIndex = -1;
 		if (currentTime) {
 			timeInput.value = `${pad(currentTime.hour)}:${pad(currentTime.minute)}`;
 		}
@@ -289,6 +311,7 @@ export const createDatePicker = (
 				text: String(date.getDate()),
 			});
 			dayBtn.type = "button";
+			dayBtn.tabIndex = -1;
 			dayBtn.setAttr("aria-label", ariaFormatter.format(date));
 
 			if (isOutside) dayBtn.addClass("is-outside");
@@ -347,4 +370,36 @@ export const createDatePicker = (
 			root.remove();
 		},
 	};
+};
+
+/**
+ * Adds a calendar button to `field`, the `.qa-date-field` wrapper around a date
+ * text box, that shows or hides the calendar in `pickerHost`. The choice is a
+ * setting, so every date field follows it. Returns the unsubscribe.
+ */
+export const attachCalendarToggle = (
+	field: HTMLElement,
+	pickerHost: HTMLElement,
+): (() => void) => {
+	const button = field.createEl("button", {
+		cls: "qa-date-field__calendar clickable-icon",
+	});
+	button.type = "button";
+	button.tabIndex = -1;
+	setIcon(button, "calendar");
+	// Leaves focus in the text box, so typing a date carries on after a click.
+	button.addEventListener("mousedown", (event) => event.preventDefault());
+	button.addEventListener("click", () => {
+		settingsStore.setState({
+			showDateCalendar: !settingsStore.getState().showDateCalendar,
+		});
+	});
+
+	const apply = (shown: boolean) => {
+		pickerHost.toggle(shown);
+		button.toggleClass("is-shown", shown);
+		button.setAttr("aria-label", shown ? "Hide calendar" : "Show calendar");
+	};
+	apply(settingsStore.getState().showDateCalendar);
+	return settingsStore.subscribe((settings) => apply(settings.showDateCalendar));
 };

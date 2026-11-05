@@ -51,7 +51,7 @@ export function mountSystemPromptLiteralNote(
 	field: HTMLTextAreaElement,
 	initialValue: string,
 ): (value: string) => void {
-	const note = container.createEl("div", {
+	const note = container.createDiv({
 		text: t("QuickAdd sends the system prompt to the model as written - format syntax like {{DATE}} is not resolved here. Only the prompt template is formatted."),
 		cls: "qa-literal-format-note",
 	});

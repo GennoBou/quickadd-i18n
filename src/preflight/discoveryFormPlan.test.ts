@@ -14,8 +14,10 @@ import { QA_INTERNAL_DATE_ORIGIN } from "src/constants";
 import { buildDiscoveryFormPlan, resolveDiscoveryFieldRequirement, storeDiscoveryFormAnswers } from "./discoveryFormPlan";
 import { getPreparedTemplateNoteSelection, withPreparedChoiceInputs } from "./preparedChoiceInputs";
 
-vi.mock("src/utilityObsidian", () => ({
+vi.mock("src/utils/templateFolderUtils", () => ({
 	getTemplateFile: (_app: App, path: string) => ({ path }),
+}));
+vi.mock("src/utils/vaultQueries", () => ({
 	isFolder: () => false,
 }));
 vi.mock("src/logger/logManager", () => ({ log: { logMessage: vi.fn(), logWarning: vi.fn() } }));
@@ -216,8 +218,9 @@ describe("discovery form planning", () => {
 		expect(initial?.requirements).toEqual([]);
 		const suffix = await buildDiscoveryFormPlan(app, plugin, executor,
 			macro(nested(capture, "first"), nested(capture, "second")));
+		// Each step's fields follow its format, "{{VALUE}} {{VALUE:shared}}" (#1876).
 		expect(suffix?.requirements.map((field) => field.id)).toEqual([
-			"shared", "__qa.value.first", "__qa.value.second",
+			"__qa.value.first", "shared", "__qa.value.second",
 		]);
 		expect(suffix?.config.notes).toEqual([]);
 	});
@@ -253,5 +256,32 @@ describe("discovery form planning", () => {
 		await withPreparedChoiceInputs(executor, choice.id, async () => {
 			expect(executor.variables.get(QA_INTERNAL_DATE_ORIGIN)).toBe("@date:2026-09-05");
 		});
+	});
+
+	it("asks for a picked day on the macro, not on its steps", async () => {
+		executor.callerDay = "pick";
+		const plan = await buildDiscoveryFormPlan(app, plugin, executor,
+			macro(nested(template, "note"), nested(capture, "cap")));
+		if (!plan) throw new Error("Expected discovery form");
+		expect(plan.steps.map((step) => [step.occurrenceId, step.bindings.has(QA_INTERNAL_DATE_ORIGIN)]))
+			.toEqual([["macro", true], ["note", false], ["cap", false]]);
+		expect(executor.callerDay).toBe("pick");
+	});
+
+	it("asks no step for a day the macro was handed", async () => {
+		executor.callerDay = new Date(2026, 2, 1);
+		capture.dateOrigin = { kind: "ask" };
+		const plan = await buildDiscoveryFormPlan(app, plugin, executor,
+			macro(nested(template, "note"), nested(capture, "cap")));
+		if (!plan) throw new Error("Expected discovery form");
+		expect(plan.requirements.some((field) => field.id === QA_INTERNAL_DATE_ORIGIN)).toBe(false);
+	});
+
+	it("asks for a picked day on a Template run on its own", async () => {
+		executor.callerDay = "pick";
+		const plan = await buildDiscoveryFormPlan(app, plugin, executor, template);
+		if (!plan) throw new Error("Expected discovery form");
+		expect(plan.steps.map((step) => [step.occurrenceId, step.bindings.has(QA_INTERNAL_DATE_ORIGIN)]))
+			.toEqual([[template.id, true]]);
 	});
 });

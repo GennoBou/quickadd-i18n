@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { createChoiceExecutor } from "../../tests/helpers/createChoiceExecutor";
 import type { App } from "obsidian";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,9 +41,9 @@ vi.mock("./MacroChoiceEngine", () => ({
 	}),
 }));
 
-vi.mock("../utilityObsidian", async () => {
+vi.mock("../utils/userScript", async () => {
 	const actual = await vi.importActual<Record<string, unknown>>(
-		"../utilityObsidian",
+		"../utils/userScript",
 	);
 
 	return {

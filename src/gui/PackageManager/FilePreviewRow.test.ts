@@ -1,5 +1,7 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render } from "@testing-library/svelte";
+import type { ComponentProps } from "svelte";
+import { fireEvent, render, screen } from "@testing-library/svelte";
 import FilePreviewRow from "./FilePreviewRow.svelte";
 import type { PreviewFile } from "../../services/packagePreview";
 import type {
@@ -45,37 +47,36 @@ function makePackage(
 	};
 }
 
-const noop = () => {};
+const noop = () => { };
+
+function renderRow(props: Partial<ComponentProps<typeof FilePreviewRow>> = {}) {
+	return render(FilePreviewRow, {
+		props: {
+			file: makeFile(),
+			pkg: makePackage("scripts/fetch.js", "x"),
+			mode: "write",
+			destinationPath: "scripts/fetch.js",
+			destinationExists: false,
+			onPathInput: noop,
+			onModeChange: noop,
+			onReviewed: noop,
+			...props,
+		},
+	});
+}
 
 describe("FilePreviewRow", () => {
 	it("shows a NEW FILE status when the destination does not exist", () => {
-		const { getByText } = render(FilePreviewRow, {
-			props: {
-				file: makeFile(),
-				pkg: makePackage("scripts/fetch.js", "x"),
-				mode: "write",
-				destinationPath: "scripts/fetch.js",
-				destinationExists: false,
-				onPathInput: noop,
-				onModeChange: noop,
-				onReviewed: noop,
-			},
+		const { getByText } = renderRow({
 		});
 		expect(getByText("New file")).toBeTruthy();
 	});
 
 	it("shows a WILL OVERWRITE status when the destination exists", () => {
-		const { getByText } = render(FilePreviewRow, {
-			props: {
-				file: makeFile({ exists: true }),
-				pkg: makePackage("scripts/fetch.js", "x"),
-				mode: "overwrite",
-				destinationPath: "scripts/fetch.js",
-				destinationExists: true,
-				onPathInput: noop,
-				onModeChange: noop,
-				onReviewed: noop,
-			},
+		const { getByText } = renderRow({
+			file: makeFile({ exists: true }),
+			mode: "overwrite",
+			destinationExists: true,
 		});
 		expect(getByText("Will overwrite")).toBeTruthy();
 	});
@@ -83,17 +84,9 @@ describe("FilePreviewRow", () => {
 	it("labels executable scripts and reveals decoded contents on expand", async () => {
 		const onReviewed = vi.fn();
 		const source = "console.log('hello')";
-		const { getByText, queryByText } = render(FilePreviewRow, {
-			props: {
-				file: makeFile(),
-				pkg: makePackage("scripts/fetch.js", source),
-				mode: "write",
-				destinationPath: "scripts/fetch.js",
-				destinationExists: false,
-				onPathInput: noop,
-				onModeChange: noop,
-				onReviewed,
-			},
+		const { getByText, queryByText } = renderRow({
+			pkg: makePackage("scripts/fetch.js", source),
+			onReviewed,
 		});
 
 		// Contents hidden until expanded.
@@ -109,22 +102,16 @@ describe("FilePreviewRow", () => {
 
 	it("does not report non-executable files as reviewed", async () => {
 		const onReviewed = vi.fn();
-		const { getByText } = render(FilePreviewRow, {
-			props: {
-				file: makeFile({
-					originalPath: "templates/Note.md",
-					kind: "template",
-					executable: false,
-					requiresReview: false,
-				}),
-				pkg: makePackage("templates/Note.md", "# Note", "template"),
-				mode: "write",
-				destinationPath: "templates/Note.md",
-				destinationExists: false,
-				onPathInput: noop,
-				onModeChange: noop,
-				onReviewed,
-			},
+		const { getByText } = renderRow({
+			file: makeFile({
+				originalPath: "templates/Note.md",
+				kind: "template",
+				executable: false,
+				requiresReview: false,
+			}),
+			pkg: makePackage("templates/Note.md", "# Note", "template"),
+			destinationPath: "templates/Note.md",
+			onReviewed,
 		});
 
 		await fireEvent.click(getByText("View contents"));
@@ -133,22 +120,16 @@ describe("FilePreviewRow", () => {
 
 	it("reports gate-required bundled scripts as reviewed even when not command-graph executable", async () => {
 		const onReviewed = vi.fn();
-		const { getByText } = render(FilePreviewRow, {
-			props: {
-				file: makeFile({
-					originalPath: "scripts/orphan.js",
-					executable: false,
-					requiresReview: true,
-					orphan: true,
-				}),
-				pkg: makePackage("scripts/orphan.js", "console.log('orphan')"),
-				mode: "write",
-				destinationPath: "scripts/orphan.js",
-				destinationExists: false,
-				onPathInput: noop,
-				onModeChange: noop,
-				onReviewed,
-			},
+		const { getByText } = renderRow({
+			file: makeFile({
+				originalPath: "scripts/orphan.js",
+				executable: false,
+				requiresReview: true,
+				orphan: true,
+			}),
+			pkg: makePackage("scripts/orphan.js", "console.log('orphan')"),
+			destinationPath: "scripts/orphan.js",
+			onReviewed,
 		});
 
 		await fireEvent.click(getByText("View contents"));
@@ -159,18 +140,10 @@ describe("FilePreviewRow", () => {
 		// Skip points the dependent choice at whatever file is already on disk,
 		// so the reviewed bundled contents are NOT what runs: the badge must not
 		// imply otherwise, and a warning must explain the substitution.
-		const { getByText, queryByText } = render(FilePreviewRow, {
-			props: {
-				file: makeFile(),
-				pkg: makePackage("scripts/fetch.js", "x"),
-				mode: "skip",
-				destinationPath: "scripts/fetch.js",
-				destinationExists: true,
-				reviewed: true,
-				onPathInput: noop,
-				onModeChange: noop,
-				onReviewed: noop,
-			},
+		const { getByText, queryByText } = renderRow({
+			mode: "skip",
+			destinationExists: true,
+			reviewed: true,
 		});
 
 		expect(queryByText("Reviewed")).toBeNull();
@@ -178,18 +151,8 @@ describe("FilePreviewRow", () => {
 	});
 
 	it("keeps the Reviewed badge and no skip warning when the script will be written", () => {
-		const { getByText, queryByText } = render(FilePreviewRow, {
-			props: {
-				file: makeFile(),
-				pkg: makePackage("scripts/fetch.js", "x"),
-				mode: "write",
-				destinationPath: "scripts/fetch.js",
-				destinationExists: false,
-				reviewed: true,
-				onPathInput: noop,
-				onModeChange: noop,
-				onReviewed: noop,
-			},
+		const { getByText, queryByText } = renderRow({
+			reviewed: true,
 		});
 
 		expect(getByText("Reviewed")).toBeTruthy();
@@ -199,26 +162,47 @@ describe("FilePreviewRow", () => {
 	it("drives the destination/action callbacks via labelled controls", async () => {
 		const onPathInput = vi.fn();
 		const onModeChange = vi.fn();
-		const { getByLabelText } = render(FilePreviewRow, {
-			props: {
-				file: makeFile(),
-				pkg: makePackage("scripts/fetch.js", "x"),
-				mode: "write",
-				destinationPath: "scripts/fetch.js",
-				destinationExists: false,
-				onPathInput,
-				onModeChange,
-				onReviewed: noop,
-			},
+		const { getByLabelText } = renderRow({
+			onPathInput,
+			onModeChange,
 		});
 
-		// Controls are reachable by their field name (label association intact).
-		const input = getByLabelText("Destination") as HTMLInputElement;
+		// Controls are reachable by a label that names their file, so rows stay
+		// distinguishable when a package has several.
+		const input = getByLabelText(
+			"Destination for scripts/fetch.js",
+		) as HTMLInputElement;
 		await fireEvent.input(input, { target: { value: "vault/new.js" } });
 		expect(onPathInput).toHaveBeenCalledWith("vault/new.js");
 
-		const select = getByLabelText("Action") as HTMLSelectElement;
+		const select = getByLabelText(
+			"Action for scripts/fetch.js",
+		) as HTMLSelectElement;
 		await fireEvent.change(select, { target: { value: "skip" } });
 		expect(onModeChange).toHaveBeenCalledWith("skip");
+	});
+
+	it("keeps each row's labels on its own controls when paths look alike", () => {
+		// "a/b.js" and "a-b.js" read the same once path characters are replaced
+		// with "-", so ids derived that way would point both labels at one row.
+		for (const path of ["scripts/a/b.js", "scripts/a-b.js"]) {
+			renderRow({
+				file: makeFile({ originalPath: path }),
+				pkg: makePackage(path, "x"),
+				destinationPath: `dest/${path}`,
+			});
+		}
+
+		for (const path of ["scripts/a/b.js", "scripts/a-b.js"]) {
+			const input = screen.getByLabelText(
+				`Destination for ${path}`,
+			) as HTMLInputElement;
+			expect(input.value).toBe(`dest/${path}`);
+		}
+		const toggles = screen.getAllByText("View contents");
+		const targets = toggles.map((toggle) =>
+			toggle.closest("button")?.getAttribute("aria-controls"),
+		);
+		expect(new Set(targets).size).toBe(2);
 	});
 });

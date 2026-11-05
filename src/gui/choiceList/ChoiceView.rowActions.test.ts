@@ -1,17 +1,14 @@
+// @vitest-environment jsdom
+import { renderChoiceView } from "../../../tests/helpers/settings/choiceView";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("obsidian-dataview", () => ({ getAPI: vi.fn() }));
 vi.mock("../choiceRename", () => ({
 	promptRenameChoice: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { App } from "obsidian";
-import { fireEvent, render } from "@testing-library/svelte";
-import ChoiceView from "./ChoiceView.svelte";
+import { fireEvent } from "@testing-library/svelte";
 import { log } from "../../logger/logManager";
-import type QuickAdd from "../../main";
 import type IChoice from "../../types/choices/IChoice";
-import type { Plain } from "../svelte/persist.svelte";
 
 /**
  * #1585. The row actions are `async` handlers with no `catch`. Svelte re-throws an
@@ -31,15 +28,6 @@ const choiceWithUnknownType = (): IChoice =>
 		command: false,
 	}) as unknown as IChoice;
 
-const renderChoiceView = (choices: IChoice[]) =>
-	render(ChoiceView, {
-		props: {
-			app: new App() as never,
-			plugin: {} as unknown as QuickAdd,
-			choices,
-			saveChoices: vi.fn<(next: Plain<IChoice[]>) => void>(),
-		},
-	});
 
 describe("ChoiceView row actions that fail (#1585)", () => {
 	afterEach(() => {
@@ -98,7 +86,7 @@ describe("ChoiceView row actions that fail (#1585)", () => {
 
 		await fireEvent.click(getByLabelText("Configure Choice with a bad type"));
 
-		expect(getByLabelText("Configure Healthy template")).toBeInTheDocument();
-		expect(getByLabelText("New choice")).toBeInTheDocument();
+		expect(getByLabelText("Configure Healthy template").isConnected).toBe(true);
+		expect(getByLabelText("New choice").isConnected).toBe(true);
 	});
 });

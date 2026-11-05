@@ -1,93 +1,12 @@
+import { createFile, createMockApp } from "../../tests/helpers/formatters/captureFixtures";
+import { createSelectionFormatterPlugin } from "../../tests/helpers/formatters/plugin";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { App, TFile } from "obsidian";
 import type ICaptureChoice from "../types/choices/ICaptureChoice";
 import type { SectionOrdering } from "../types/choices/ICaptureChoice";
 
 // Mocks mirror captureChoiceFormatter-742-multiline-insert.test.ts so the
 // formatter can run under jsdom without real Obsidian/Templater.
-vi.mock("../utilityObsidian", () => ({
-	templaterParseTemplate: vi.fn().mockResolvedValue(null),
-}));
-vi.mock("../gui/InputPrompt", () => ({
-	__esModule: true,
-	default: class {
-		factory() {
-			return {
-				Prompt: vi.fn().mockResolvedValue(""),
-				PromptWithContext: vi.fn().mockResolvedValue(""),
-			} as any;
-		}
-	},
-}));
-vi.mock("../gui/InputSuggester/inputSuggester", () => ({
-	__esModule: true,
-	default: class {
-		constructor() {}
-	},
-}));
-vi.mock("../gui/GenericSuggester/genericSuggester", () => ({
-	__esModule: true,
-	default: { Suggest: vi.fn().mockResolvedValue("") },
-}));
-vi.mock("../gui/VDateInputPrompt/VDateInputPrompt", () => ({
-	__esModule: true,
-	default: { Prompt: vi.fn().mockResolvedValue("") },
-}));
-vi.mock("../utils/errorUtils", () => ({
-	__esModule: true,
-	reportError: vi.fn(),
-	isCancellationError: vi.fn().mockReturnValue(false),
-}));
-vi.mock("../gui/MathModal", () => ({
-	__esModule: true,
-	MathModal: { Prompt: vi.fn().mockResolvedValue("") },
-}));
-vi.mock("../engine/SingleInlineScriptEngine", () => ({
-	__esModule: true,
-	SingleInlineScriptEngine: class {
-		public params = { variables: {} as Record<string, unknown> };
-		async runAndGetOutput() {
-			return "";
-		}
-	},
-}));
-vi.mock("../engine/SingleMacroEngine", () => ({
-	__esModule: true,
-	SingleMacroEngine: class {
-		async runAndGetOutput() {
-			return "";
-		}
-	},
-}));
-vi.mock("../engine/SingleTemplateEngine", () => ({
-	__esModule: true,
-	SingleTemplateEngine: class {
-		async run() {
-			return "";
-		}
-		getAndClearTemplatePropertyVars() {
-			return new Map();
-		}
-		setLinkToCurrentFileBehavior() {}
-	},
-}));
-vi.mock("obsidian-dataview", () => ({
-	__esModule: true,
-	getAPI: vi.fn().mockReturnValue(null),
-}));
-vi.mock("../main", () => ({
-	__esModule: true,
-	default: class QuickAdd {
-		static instance = {
-			settings: { inputPrompt: "single-line" },
-			app: {
-				workspace: { getActiveViewOfType: vi.fn().mockReturnValue(null) },
-			},
-		};
-		settings = QuickAdd.instance.settings;
-		app = QuickAdd.instance.app;
-	},
-}));
+vi.mock("../utils/templaterIntegration", async () => (await import("../../tests/helpers/formatters/mocks")).templaterIntegrationMock());
 
 import { CaptureChoiceFormatter } from "./captureChoiceFormatter";
 
@@ -176,37 +95,8 @@ const createChoice = (
 		...overrides,
 	}) as ICaptureChoice;
 
-const createMockApp = (): App =>
-	({
-		workspace: {
-			getActiveFile: vi.fn().mockReturnValue(null),
-			getActiveViewOfType: vi.fn().mockReturnValue(null),
-		},
-		metadataCache: { getFileCache: vi.fn().mockReturnValue(null) },
-		fileManager: {
-			generateMarkdownLink: vi.fn().mockReturnValue(""),
-			processFrontMatter: vi.fn(),
-		},
-		vault: { adapter: { exists: vi.fn() }, cachedRead: vi.fn() },
-	}) as unknown as App;
-
-const createFile = (path = "Target.md"): TFile =>
-	({
-		path,
-		name: path.split("/").pop() ?? path,
-		basename: (path.split("/").pop() ?? path).replace(/\.(md|canvas)$/i, ""),
-		extension: "md",
-	}) as unknown as TFile;
-
 const createFormatter = () =>
-	new CaptureChoiceFormatter(createMockApp(), {
-		settings: {
-			inputPrompt: "single-line",
-			enableTemplatePropertyTypes: false,
-			globalVariables: {},
-			useSelectionAsCaptureValue: true,
-		},
-	} as any);
+	new CaptureChoiceFormatter(createMockApp(), createSelectionFormatterPlugin());
 
 async function runOnce(
 	choice: ICaptureChoice,
@@ -214,7 +104,7 @@ async function runOnce(
 	capture: string,
 ): Promise<string> {
 	const formatter = createFormatter();
-	return formatter.formatContentWithFile(capture, choice, content, createFile());
+	return formatter.formatContentWithFile(capture, choice, content, createFile()).then(({ content }) => content);
 }
 
 /** Feed each run's output back as the next run's content (real repeat-capture). */
@@ -234,9 +124,9 @@ const count = (haystack: string, needle: string) =>
 	haystack.split(needle).length - 1;
 
 beforeEach(() => {
-	(global as any).navigator = {
+	vi.stubGlobal("navigator", {
 		clipboard: { readText: vi.fn().mockResolvedValue("") },
-	};
+	});
 	installFakeMoment();
 });
 
@@ -263,6 +153,17 @@ describe("#481 — ordered create-if-not-found placement", () => {
 		const seed = "---\ndate: 2026-07-25\n---\n\nSome text\n";
 		const out = await runOnce(choice, seed, "- entry\n");
 		expect(out).toBe("---\ndate: 2026-07-25\n---\n\n## Log\n- entry\nSome text\n");
+	});
+
+	it("separates a section created at the body start from a blockquote below it (#2163)", async () => {
+		const choice = createChoice({ after: "## 2026-01-02" });
+		expect(await runOnce(choice, "> existing quote\n", "> first\n")).toBe(
+			"## 2026-01-02\n> first\n\n> existing quote\n",
+		);
+		const callout = createChoice({ after: "> [!info]- Captured today" });
+		expect(await runOnce(callout, "> existing quote\n", "> first\n")).toBe(
+			"> [!info]- Captured today\n> first\n\n> existing quote\n",
+		);
 	});
 
 	it("never places a created section inside a frontmatter-only note's YAML", async () => {
@@ -469,6 +370,39 @@ describe("#481 — ordered create-if-not-found placement", () => {
 		expect(count(out, "**Tasks**")).toBe(1);
 		expect(out).toBe(
 			"# Log\n\n```md\n## 2026-06-16\n```\n\n## 2026-06-16\n**Tasks**\n- new\n\n## 2026-06-14\n- old\n",
+		);
+	});
+
+	it.each([
+		["an inline-code line", "```inline```"],
+		["a 4-space-indented backticks line", "    ```"],
+		["a tab-indented backticks line", "\t```"],
+	])("finds the existing heading after %s, which opens no fence (#2001)", async (_what, line) => {
+		const choice = createChoice({
+			after: "## 2026-06-16",
+			insertAtEnd: true,
+			orderBy: {
+				by: "date",
+				direction: "desc",
+				dateFormat: "YYYY-MM-DD",
+				unparseable: "bottom",
+			},
+		});
+		const seed = `# Journal\n${line}\n\n## 2026-06-16\n- entry\n`;
+		const out = await runOnce(choice, seed, "- new\n");
+		expect(count(out, "## 2026-06-16")).toBe(1);
+		expect(out).toBe(`# Journal\n${line}\n\n## 2026-06-16\n- entry\n- new\n`);
+	});
+
+	it("still hides a heading in a fence closed by a longer run, like Obsidian (#2001)", async () => {
+		const choice = createChoice({
+			after: "## 2026-06-16",
+			orderBy: { by: "date", direction: "desc", dateFormat: "YYYY-MM-DD", unparseable: "bottom" },
+		});
+		const seed = "# Log\n\n```\n## 2026-06-16\n`````\n\n## 2026-06-14\n- old\n";
+		const out = await runOnce(choice, seed, "- new\n");
+		expect(out).toBe(
+			"# Log\n\n```\n## 2026-06-16\n`````\n\n## 2026-06-16\n- new\n\n## 2026-06-14\n- old\n",
 		);
 	});
 

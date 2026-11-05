@@ -33,10 +33,30 @@ describe("parseFileToken", () => {
 		expect(parseFileToken("People|link|path")?.mode).toBe("path");
 	});
 
-	it("parses optional and custom bare flags", () => {
-		const parsed = parseFileToken("People|optional|custom");
-		expect(parsed?.optional).toBe(true);
-		expect(parsed?.allowCustomInput).toBe(true);
+	it.each([
+		{
+			name: "parses optional and custom bare flags",
+			input: "People|optional|custom",
+			expected: { optional: true, allowCustomInput: true },
+		},
+		{
+			name: "parses an explicit multi-select format",
+			input: "People|multi|format:yaml",
+			expected: { multiSelect: true, multiFormat: "yaml" },
+		},
+		{
+			name: "parses |format:spaced",
+			input: "People|multi|format:spaced",
+			expected: { multiSelect: true, multiFormat: "spaced" },
+		},
+		{
+			name: "parses label and the |name: alias",
+			input: "People|link|label:Pick a person|name:reviewer",
+			expected: { label: "Pick a person", aliasName: "reviewer", variableKey:
+			`${FILE_VARIABLE_PREFIX}name=reviewer|folder=People` },
+		},
+	])("$name", ({ input, expected }) => {
+		expect(parseFileToken(input)).toEqual(expect.objectContaining(expected));
 	});
 
 	it("parses multi-select as FILE behavior", () => {
@@ -44,18 +64,6 @@ describe("parseFileToken", () => {
 		expect(parsed?.multiSelect).toBe(true);
 		expect(parsed?.multiFormat).toBe("auto");
 		expect(parsed?.variableKey).toContain("|multi");
-	});
-
-	it("parses an explicit multi-select format", () => {
-		const parsed = parseFileToken("People|multi|format:yaml");
-		expect(parsed?.multiSelect).toBe(true);
-		expect(parsed?.multiFormat).toBe("yaml");
-	});
-
-	it("parses |format:spaced", () => {
-		const parsed = parseFileToken("People|multi|format:spaced");
-		expect(parsed?.multiSelect).toBe(true);
-		expect(parsed?.multiFormat).toBe("spaced");
 	});
 
 	it("warns on |format: without |multi, even |format:auto", () => {
@@ -67,16 +75,6 @@ describe("parseFileToken", () => {
 		expect(warnings.some((m) => m.includes("needs |multi"))).toBe(true);
 	});
 
-	it("parses label and the |name: alias", () => {
-		const parsed = parseFileToken("People|link|label:Pick a person|name:reviewer");
-		expect(parsed?.label).toBe("Pick a person");
-		expect(parsed?.aliasName).toBe("reviewer");
-		// The alias drives the variable key (shared identity), scoped to the folder.
-		expect(parsed?.variableKey).toBe(
-			`${FILE_VARIABLE_PREFIX}name=reviewer|folder=People`,
-		);
-	});
-
 	it("reuses the FIELD filter grammar (folder/tag/exclude-*)", () => {
 		const parsed = parseFileToken(
 			"fields/people|tag:topic|exclude-folder:Archive|exclude-tag:wip|exclude-file:tmp.md",
@@ -86,6 +84,22 @@ describe("parseFileToken", () => {
 		expect(parsed?.filter.excludeFolders).toEqual(["Archive"]);
 		expect(parsed?.filter.excludeTags).toEqual(["wip"]);
 		expect(parsed?.filter.excludeFiles).toEqual(["tmp.md"]);
+	});
+
+	it("lists Markdown notes only unless |type: is given", () => {
+		expect(parseFileToken("People")?.extensions).toBeUndefined();
+		expect(parseFileToken("People|type:any")?.extensions).toBe("any");
+		expect(parseFileToken("People|type:any|type:image")?.extensions).toBe("any");
+	});
+
+	it("expands |type: categories and takes other values as extensions", () => {
+		const extensions = parseFileToken(
+			"Attachments|type:image,PDF|type:.canvas",
+		)?.extensions;
+		expect(extensions).toBeInstanceOf(Set);
+		expect([...(extensions as Set<string>)].sort()).toEqual([
+			"avif", "bmp", "canvas", "gif", "jpeg", "jpg", "pdf", "png", "svg", "webp",
+		]);
 	});
 
 	describe("variableKey identity", () => {
@@ -137,6 +151,12 @@ describe("parseFileToken", () => {
 			const pub = parseFileToken("People|tag:public|name:ref")!.variableKey;
 			const priv = parseFileToken("People|tag:private|name:ref")!.variableKey;
 			expect(pub).not.toBe(priv);
+		});
+
+		it("does NOT share |name: across different file types", () => {
+			const notes = parseFileToken("Inbox|name:ref")!.variableKey;
+			const images = parseFileToken("Inbox|type:image|name:ref")!.variableKey;
+			expect(notes).not.toBe(images);
 		});
 
 		it("does NOT collapse a comma-bearing filter value with two separate values", () => {
@@ -234,6 +254,8 @@ describe("fileBasenameFromPath", () => {
 	});
 });
 
+type LabelRow = { path: string; title?: string; h1s: string[]; h2s?: string[]; label: string };
+
 describe("buildFileDisplayLabels", () => {
 	const makeFile = (path: string) => {
 		const segment = path.split("/").pop() ?? path;
@@ -268,11 +290,70 @@ describe("buildFileDisplayLabels", () => {
 		expect(labels).toEqual(["Ada Lovelace (01HX)"]);
 	});
 
-	it("falls back to the first H1 when no title property exists", () => {
-		const file = makeFile("People/01HX.md");
+	it("falls back to the first H1 of an ID-named note without a title property", () => {
+		const file = makeFile("People/202610061432.md");
 		const labels = buildFileDisplayLabels([file], () => ({
 			headings: [{ heading: "Ada Lovelace", level: 1 }],
 		} as never));
-		expect(labels).toEqual(["Ada Lovelace (01HX)"]);
+		expect(labels).toEqual(["Ada Lovelace (202610061432)"]);
+	});
+
+	it.each<LabelRow>([
+		{ path: "Projects/Garden plan.md", h1s: ["Log", "Ideas"], label: "Garden plan" },
+		{ path: "Projects/Reading list.md", h1s: ["Background"], label: "Reading list" },
+		{ path: "Daily/2026-10-06.md", h1s: ["Log"], label: "2026-10-06" },
+		{
+			path: "Zettel/202610061432.md",
+			h1s: ["Coffee brewing ratios", "References"],
+			label: "Coffee brewing ratios (202610061432)",
+		},
+		{
+			path: "Zettel/3f2b8c1e-6d4a-4f1b-9c2e-7a5d8e9f0b1c.md",
+			h1s: ["Ada Lovelace"],
+			label: "Ada Lovelace (3f2b8c1e-6d4a-4f1b-9c2e-7a5d8e9f0b1c)",
+		},
+		{
+			path: "Zettel/3f2b8c1e6d4a4f1b9c2e7a5d8e9f0b1c.md",
+			h1s: ["Ada Lovelace"],
+			label: "Ada Lovelace (3f2b8c1e6d4a4f1b9c2e7a5d8e9f0b1c)",
+		},
+		{
+			path: "Zettel/3f2b8c1e-6d4a4f1b-9c2e-7a5d8e9f0b1c.md",
+			h1s: ["Ada Lovelace"],
+			label: "3f2b8c1e-6d4a4f1b-9c2e-7a5d8e9f0b1c",
+		},
+		{
+			path: "Zettel/01HX3K5Z8Q9R2T4V6W7Y0A1B2C.md",
+			h1s: ["Ada Lovelace"],
+			label: "Ada Lovelace (01HX3K5Z8Q9R2T4V6W7Y0A1B2C)",
+		},
+		{ path: "Zettel/202610061433.md", h1s: [], label: "202610061433" },
+		{ path: "Zettel/202610061434.md", h1s: [], h2s: ["Section"], label: "202610061434" },
+		{
+			path: "Projects/Garden plan.md",
+			title: "Allotment",
+			h1s: ["Log"],
+			label: "Allotment (Garden plan)",
+		},
+		{ path: "Gear/4k.md", h1s: ["Monitors"], label: "4k" },
+		{ path: "Gear/1080p.md", h1s: ["Monitors"], label: "1080p" },
+		{ path: "Work/OKR-2026.md", h1s: ["Goals"], label: "OKR-2026" },
+		{ path: "Weekly/2026-W40.md", h1s: ["Log"], label: "2026-W40" },
+		{ path: "Tech/K8s.md", h1s: ["Overview"], label: "K8s" },
+		...[
+			"2x4", "4x4", "24x7", "9to5", "1v1", "100m2", "7up2", "2.0b1", "3.1rc1",
+			"2024q1", "2026w40", "1on1", "1920x1080", "2d6", "1d20", "01HZX3",
+			"4k120", "1080p60", "1920x1080p", "24x7x365", "4k2k", "0x1F", "01HX",
+			"1a2b", "1a2b3", "21.3a1", "21.3a1b", "20261006-1432", "ResearchStrategyAndSystems",
+		].map((name) => ({ path: `Misc/${name}.md`, h1s: ["Overview"], label: name })),
+	])("labels $path with H1s $h1s as $label", ({ path, title, h1s, h2s = [], label }) => {
+		const labels = buildFileDisplayLabels([makeFile(path)], () => ({
+			frontmatter: title ? { title } : undefined,
+			headings: [
+				...h1s.map((heading) => ({ heading, level: 1 })),
+				...h2s.map((heading) => ({ heading, level: 2 })),
+			],
+		} as never));
+		expect(labels).toEqual([label]);
 	});
 });

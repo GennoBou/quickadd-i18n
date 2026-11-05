@@ -1,4 +1,5 @@
 import type { App, TFile } from "obsidian";
+import { processNoteFrontMatter } from "./noteContent";
 import { log } from "../logger/logManager";
 import {
 	DEFAULT_FRONTMATTER_HANDLING,
@@ -64,12 +65,7 @@ export function appendFrontmatterPropertyLinkValue(
 	propertyKey: string,
 	linkText: string,
 ): void {
-	const requestedKey = propertyKey.trim();
-	if (!requestedKey) {
-		throw new Error("Cannot append link to an empty frontmatter property key.");
-	}
-
-	const key = resolveFrontmatterPropertyKey(frontmatter, requestedKey);
+	const key = resolveFrontmatterPropertyKey(frontmatter, propertyKey);
 	const existing = frontmatter[key];
 	if (Array.isArray(existing)) {
 		existing.push(linkText);
@@ -97,12 +93,7 @@ export function appendConfiguredFrontmatterPropertyLinkValue(
 	linkText: string,
 	frontmatterHandling: FrontmatterHandling = DEFAULT_FRONTMATTER_HANDLING,
 ): void {
-	const requestedKey = propertyKey.trim();
-	if (!requestedKey) {
-		throw new Error("Cannot append link to an empty frontmatter property key.");
-	}
-
-	const key = resolveFrontmatterPropertyKey(frontmatter, requestedKey);
+	const key = resolveFrontmatterPropertyKey(frontmatter, propertyKey);
 	const existing = frontmatter[key];
 	if (Array.isArray(existing)) {
 		existing.push(linkText);
@@ -143,6 +134,10 @@ function resolveFrontmatterPropertyKey(
 	frontmatter: Record<string, unknown>,
 	propertyKey: string,
 ): string {
+	propertyKey = propertyKey.trim();
+	if (!propertyKey) {
+		throw new Error("Cannot append link to an empty frontmatter property key.");
+	}
 	const normalizedPropertyKey = normalizePropertyKey(propertyKey);
 	const matchingKeys = Object.keys(frontmatter).filter(
 		(key) => normalizePropertyKey(key) === normalizedPropertyKey,
@@ -161,28 +156,6 @@ function normalizePropertyKey(propertyKey: string): string {
 	return propertyKey.trim().toLowerCase();
 }
 
-export async function appendLinkToConfiguredFrontmatterProperty(
-	app: App,
-	targetFile: TFile,
-	propertyKey: string,
-	fileToLink: TFile,
-	frontmatterHandling: FrontmatterHandling = DEFAULT_FRONTMATTER_HANDLING,
-): Promise<void> {
-	const linkText = app.fileManager.generateMarkdownLink(
-		fileToLink,
-		targetFile.path,
-	);
-
-	await app.fileManager.processFrontMatter(targetFile, (frontmatter) => {
-		appendConfiguredFrontmatterPropertyLinkValue(
-			frontmatter,
-			propertyKey,
-			linkText,
-			frontmatterHandling,
-		);
-	});
-}
-
 export async function appendLinkToFrontmatterProperty(
 	app: App,
 	target: FrontmatterPropertyTarget,
@@ -194,7 +167,7 @@ export async function appendLinkToFrontmatterProperty(
 	);
 
 	try {
-		await app.fileManager.processFrontMatter(target.file, (frontmatter) => {
+		await processNoteFrontMatter(app, target.file, (frontmatter) => {
 			appendFrontmatterPropertyLinkValue(frontmatter, target.key, linkText);
 		});
 		return true;

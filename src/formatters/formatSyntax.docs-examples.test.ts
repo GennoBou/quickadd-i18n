@@ -1,7 +1,7 @@
+import { StubFormatter as FormatterStub } from "../../tests/helpers/formatters/stubFormatter";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GLOBAL_VAR_REGEX } from "../constants";
 import type { PromptContext } from "./formatter";
-import { Formatter } from "./formatter";
 import { RequirementCollector } from "src/preflight/RequirementCollector";
 import { buildValueVariableKey } from "src/utils/valueSyntax";
 
@@ -15,9 +15,10 @@ const CURRENT_AND_2120_EXAMPLES = [
 	"Due: {{VDATE:due,YYYY-MM-DD}}\nWeek: {{VDATE:due,gggg-[W]WW}}",
 	"{{VDATE:due,YYYY-MM-DD|next monday}}",
 	"{{VDATE:due,dddd, MMMM Do, YYYY|case:lower}}",
+	"- [ ] Throw and trim 📅 {{VDATE:due,YYYY-MM-DD}}\n- [ ] Glaze fire 📅 {{VALUE:due}}",
 	"- [ ] {{VALUE|label:Task}}",
 	"---\ntitle: {{VALUE:title}}\n---\n# {{VALUE:title}}",
-	"{{VALUE:project|label:Client or project name}}",
+	"{{VALUE:project|label:Which client or project?}}",
 	"priority: {{VALUE:🔽,🔼,⏫|text:Low,Normal,High}}",
 	'{{VALUE:"This is a single choice, with a comma",Second choice}}',
 	'priority: {{VALUE:high,"a, b"|text:"High, urgent","A or B"}}',
@@ -42,6 +43,7 @@ const CURRENT_AND_2120_EXAMPLES = [
 	"{{TEMPLATE:Templates/Meeting.md}}",
 	"{{GLOBAL_VAR:Meeting Header}}",
 	"Equation: ${{MVALUE}}$",
+	"- {{TIME}} {{VALUE|type:multiline}}",
 	"project: {{FIELD:project}}",
 	"status: {{FIELD:status|default:Draft|default-always:true}}",
 	"id: {{FIELD:Id|inline:true|inline-code-blocks:ad-note}}",
@@ -114,7 +116,7 @@ function installMomentStub(): void {
 	(globalThis as any).window.moment = moment;
 }
 
-class DocsExampleFormatter extends Formatter {
+class DocsExampleFormatter extends FormatterStub {
 	public readonly suggestCalls: Array<{
 		suggestedValues: string[];
 		allowCustomInput?: boolean;
@@ -213,10 +215,6 @@ class DocsExampleFormatter extends Formatter {
 		return suggestedValues[0] ?? "";
 	}
 
-	protected suggestForFile(): string {
-		return "";
-	}
-
 	protected async suggestForField(variableName: string): Promise<string> {
 		return `[field:${variableName}]`;
 	}
@@ -261,10 +259,6 @@ class DocsExampleFormatter extends Formatter {
 	protected async getClipboardContent(): Promise<string> {
 		return "clipboard text";
 	}
-
-	protected isTemplatePropertyTypesEnabled(): boolean {
-		return false;
-	}
 }
 
 const makeApp = () =>
@@ -297,6 +291,18 @@ describe("Format Syntax documentation examples", () => {
 		}
 	});
 
+	it("reuses a VDATE answer through {{VALUE:<name>}} in the VDATE's format", async () => {
+		const formatter = new DocsExampleFormatter();
+
+		await expect(
+			formatter.render(
+				"- [ ] Throw and trim 📅 {{VDATE:due,YYYY-MM-DD}}\n- [ ] Glaze fire 📅 {{VALUE:due}}",
+			),
+		).resolves.toBe(
+			"- [ ] Throw and trim 📅 2026-05-11\n- [ ] Glaze fire 📅 2026-05-11",
+		);
+	});
+
 	it("applies documented DATE +N day offsets instead of concatenating them", async () => {
 		const formatter = new DocsExampleFormatter();
 
@@ -323,11 +329,11 @@ describe("Format Syntax documentation examples", () => {
 			dateFormat: "YYYY-MM-DD",
 		});
 		expect(collector.requirements.get("project")).toMatchObject({
-			description: "Client or project name",
+			label: "Which client or project?",
 			type: "text",
 		});
 		expect(collector.requirements.get("summary")).toMatchObject({
-			description: "Summary",
+			label: "Summary",
 			type: "textarea",
 		});
 		expect(collector.requirements.get("status")).toMatchObject({

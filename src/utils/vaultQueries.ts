@@ -2,6 +2,7 @@ import type { App, CachedMetadata, TFile } from "obsidian";
 import { TFolder } from "obsidian";
 import { FieldSuggestionFileFilter } from "./FieldSuggestionFileFilter";
 import type { FieldFilter } from "./FieldSuggestionParser";
+import type { ParsedFileToken } from "./fileSyntax";
 import {
 	normalizeFrontmatterTagValues,
 	normalizeTag,
@@ -39,27 +40,10 @@ export function getMarkdownFilesInFolder(app: App, folderPath: string): TFile[] 
 }
 
 function getFrontmatterTags(fileCache: CachedMetadata): string[] {
-	const frontmatter = fileCache.frontmatter;
-	if (!frontmatter) return [];
-
-	// You can have both a 'tag' and 'tags' key in frontmatter.
-	const frontMatterValues = Object.entries(frontmatter);
-	if (!frontMatterValues.length) return [];
-
-	const tagPairs = frontMatterValues.filter(([key, value]) => {
-		const lowercaseKey = key.toLowerCase();
-
-		// In Obsidian, these are synonymous.
-		return lowercaseKey === "tags" || lowercaseKey === "tag";
-	});
-
-	if (!tagPairs) return [];
-
-	const tags = tagPairs
+	return Object.entries(fileCache.frontmatter ?? {})
+		.filter(([key]) => ["tag", "tags"].includes(key.toLowerCase()))
 		.flatMap(([, value]) => normalizeFrontmatterTagValues(value))
-		.filter((v) => !!v);
-
-	return tags;
+		.filter(Boolean);
 }
 
 function getFileTags(app: App, file: TFile): string[] {
@@ -180,4 +164,19 @@ export function getMarkdownFilesWithProperty(
 	}
 
 	return files;
+}
+
+/** The files a `{{FILE:...}}` picker offers: its `|type:` files, then its filters. */
+export function getFileTokenFiles(app: App, parsed: ParsedFileToken): TFile[] {
+	const { extensions } = parsed;
+	const files = !extensions
+		? app.vault.getMarkdownFiles()
+		: extensions === "any"
+			? app.vault.getFiles()
+			: app.vault
+					.getFiles()
+					.filter((file) => extensions.has(file.extension.toLowerCase()));
+	return FieldSuggestionFileFilter.filterFiles(files, parsed.filter, (file) =>
+		app.metadataCache.getFileCache(file),
+	);
 }
