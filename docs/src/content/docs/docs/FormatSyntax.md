@@ -553,7 +553,6 @@ Good to know:
 
 - The picks become a real YAML list **inside front matter**. In a note body they become comma-separated text.
 - In a **Capture**, a whole multi-select token with the default `|format:auto` stays a list with [**Write position → Property**](/docs/Choices/CaptureChoice/#property). Into a list property, a multi-select token on its own line adds one item per pick, even next to other lines. `|format:markdown` and `|format:yaml` add no dashes or brackets there, and `|format:inline` or `|format:spaced` joins the picks into one item. Capturing into a brand-new note's frontmatter also produces a list when **Create file if it doesn't exist** is enabled without a template. Captures into an existing note's body write comma-separated text.
-- With the [one-page input form](/docs/Advanced/onePageInputs/), avoid commas inside a single option (like `|text:"High, urgent"`) on a `|multi` placeholder - the one-page picker can't round-trip them. The default one-prompt-at-a-time picker handles them correctly.
 
 #### Reuse the pick elsewhere: `|name:` {#value-name}
 
@@ -936,8 +935,7 @@ For example, `topics: {{FIELD:topic|multi|format:yaml}}` always writes a native
 YAML list, including in template-backed captures.
 
 :::note
-The one-page input form doesn't inline FIELD multi-selects yet: vault values
-can contain commas, and the one-page multi input uses commas as separators.
+The one-page input form doesn't inline FIELD multi-selects yet.
 When a format contains `{{FIELD:...|multi}}`, QuickAdd collects the other
 one-page inputs first, then opens the regular multi-select for the FIELD
 value.
@@ -964,6 +962,28 @@ FIELD placeholders share one answer only when they match exactly, label
 included. To ask twice from the same property, give each placeholder its own
 label: `{{FIELD:person|label:Host}}` and `{{FIELD:person|label:Note taker}}`.
 To ask once, write the same label (or none) everywhere.
+
+#### Share the answer with the rest of the run: `|name:` {#field-name}
+
+A FIELD keeps its answer to itself: a variable called `project` does not answer
+`{{FIELD:project}}`. Add `|name:<variable>` to store the answer in a
+[run variable](/docs/VariablesDataFlow/) instead, the way `{{VALUE:<variable>}}`
+does:
+
+```markdown title="You write"
+---
+project: {{FIELD:project|name:project}}
+---
+# {{VALUE:project}}
+```
+
+You pick the project once, from the values your vault already has, and
+`{{VALUE:project}}` writes the same pick.
+
+- When the variable is already set, the FIELD writes it and does not ask. The value can come from a script (`params.variables.project = "..."`), the CLI or a URI (`value-project=...`), the API, or an earlier `{{VALUE:project}}` or `{{VDATE:project}}` answer.
+- When it is not set, the FIELD asks, and later placeholders and steps read the pick as `{{VALUE:project}}`.
+- The name does not have to be the property's: `{{FIELD:project|name:client}}` shares `client`. Names match case-insensitively, as they do for `{{VALUE}}`.
+- `title` and `value` cannot be used as names: they hold the new note's file name and the unnamed `{{VALUE}}`.
 
 #### Default to the active note's value: `|default-from:active` {#field-default-from-active}
 
