@@ -1,3 +1,4 @@
+import type { SearchMatches } from "obsidian";
 import type { NumericInputConfig, SliderConfig } from "src/utils/valueSyntax";
 
 export type FieldType =
@@ -18,6 +19,7 @@ export interface FieldRequirement {
 	description?: string;
 	placeholder?: string;
 	defaultValue?: string;
+	defaultValues?: string[];
 	numericConfig?: NumericInputConfig;
 	sliderConfig?: SliderConfig;
 	options?: string[]; // for dropdowns and suggesters
@@ -28,6 +30,8 @@ export interface FieldRequirement {
 	withTime?: boolean; // VDATE |time/|datetime: render a date AND time picker
 	multiEmit?: "text" | "linklist"; // |multi:linklist wraps picks as [[name]]
 	filters?: string; // serialized filters for FIELD variables
+	/** field-suggest: the `{{FIELD:...}}` specifier, when `id` is the run variable its `|name:` names. */
+	fieldSpecifier?: string;
 	source?: "collected" | "script"; // provenance for UX badges
 	/** Any path usage disables image paste for every occurrence of this field. */
 	pathContext?: boolean;
@@ -44,7 +48,10 @@ export interface FieldRequirement {
 		allowCustomInput?: boolean;
 		caseSensitive?: boolean;
 		multiSelect?: boolean;
+		returnArray?: boolean;
+		separator?: string;
 	};
+	renderOption?: (value: string, el: HTMLElement, matches: SearchMatches) => void;
 	group?: FieldGroup;
 }
 
